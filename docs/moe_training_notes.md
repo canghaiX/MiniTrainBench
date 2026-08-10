@@ -1,7 +1,8 @@
 # MoE 与 Expert Parallel 训练笔记
 
 本文档说明 MiniTrainBench 为什么补 `all_to_all` benchmark，以及它和 MoE 训练
-Runtime 的关系。当前项目不实现完整 MoE layer，只把通信路径和设计边界讲清楚。
+Runtime 的关系。当前项目不实现完整 MoE layer，但提供 top-1 routing、capacity、
+overflow、dispatch/combine 和负载不均衡的 toy demo。
 
 ## MoE 前向路径
 
@@ -38,6 +39,14 @@ MiniTrainBench 的 `minitrainbench comm --operations all_to_all` 同时支持：
 - `uneven`：每个 rank 到不同 peer 的 split 不同，用于模拟 MoE token dispatch 的
   shape 压力。
 - `both`：默认同时跑两种模式，便于比较 latency 和 bandwidth。
+
+`minitrainbench moe route` 进一步把通信 benchmark 前的 routing 逻辑串起来：
+
+- 根据 router logits 做 top-1 expert 选择。
+- 按 capacity factor 截断每个 expert 的 token。
+- 统计 expert load、overflow、load-balance loss 和 owner rank。
+- 使用 `all_to_all_single` 做 toy token dispatch/combine；当前不实现 expert grouped
+  GEMM、完整 residual combine 或训练 loss 回传。
 
 ## 训练框架实现要点
 

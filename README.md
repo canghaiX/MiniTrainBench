@@ -6,6 +6,7 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 面试复盘和训练 Infra 高频问题见 [项目复盘与面试指南](docs/interview_guide.md)。
 MoE/expert parallel 通信笔记见 [MoE 训练笔记](docs/moe_training_notes.md)，
 Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md)。
+多机与 NCCL 诊断见 [多机与 NCCL 诊断笔记](docs/multinode_nccl_diagnostics.md)。
 
 ## 能力矩阵
 
@@ -15,9 +16,10 @@ Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md
 | DeepSpeed ZeRO | benchmark adapter | ZeRO-2/ZeRO-3 与 DDP baseline 同表对比 |
 | Checkpoint/resume | DDP/FSDP implemented | DCP、READY/latest、RNG state、`checkpoint verify` |
 | Profiler | implemented | PyTorch Profiler summary 已提交，原始 trace 不提交 |
-| MoE | all-to-all microbenchmark + notes | equal/uneven split、MoE token dispatch 设计笔记 |
-| Tensor Parallel | toy correctness check + notes | Column/Row Parallel Linear forward/backward 校验 |
-| Multi-node | not implemented | 当前聚焦单节点 8x A100 |
+| Fault tolerance | smoke + resume evidence | 精确恢复、半成品 checkpoint 跳过、配置不匹配拒绝 |
+| MoE | all-to-all microbenchmark + routing demo | equal/uneven split、MoE token dispatch 设计笔记 |
+| Tensor Parallel | toy correctness check + notes | Column/Row Parallel Linear、TP MLP、Sequence Parallel |
+| Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
 | RLHF/GRPO | not implemented | 当前聚焦 pretraining runtime / distributed infra |
 
 ## 面向训练基础设施的能力展示
@@ -32,8 +34,11 @@ Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md
 - 保存每个 rank 的 RNG 状态，支持带 dropout 的精确 checkpoint/resume 校验。
 - 支持独立 repeat trial，报告 `mean ± std`，避免单次短跑被当成严谨性能结论。
 - 支持 PyTorch Profiler，导出每 rank Chrome trace 与 rank 0 Markdown 摘要。
+- 提供 `minitrainbench doctor` 检查 GPU、NCCL、网卡和 rendezvous 连通性。
+- 提供 `minitrainbench fault smoke`，把精确 resume、半成品 checkpoint 和配置不匹配这些常见故障边界写成可复现证据。
 - 提供 toy tensor parallel correctness check，验证 Column/Row Parallel Linear
-  与单卡 reference 的 forward/backward 一致性。
+  与单卡 reference 的 forward/backward 一致性，并补了 toy MLP 与 sequence parallel demo。
+- 提供 toy MoE routing demo，记录 top-1 dispatch、capacity、overflow 和 load imbalance。
 - 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
 - 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
@@ -41,8 +46,9 @@ Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md
 
 > 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP/DeepSpeed
 > ZeRO 在 1/2/4/8 卡下的吞吐、step time、显存和 NCCL collective 行为，补充
-> all-to-all MoE 通信 benchmark、toy tensor parallel correctness check、CPU CI
-> smoke test、Profiler trace、可插拔训练策略、精确分布式 checkpoint/resume 和
+> all-to-all MoE 通信 benchmark、toy tensor parallel / sequence parallel correctness check、
+> CPU CI smoke test、Profiler trace、可插拔训练策略、精确分布式 checkpoint/resume、
+> 故障恢复 smoke、doctor 诊断和
 > 可复现 Markdown 报告。
 
 ## 训练框架能力点
@@ -70,6 +76,13 @@ Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md
   expert parallel 的 token dispatch/combine 通信路径。
 - `minitrainbench tp check` 用 toy Column/Row Parallel Linear 展示 Megatron-style
   tensor parallel 的切分语义，不把 TP/PP/SP 强行并入当前 Runtime。
+- `minitrainbench tp mlp` 和 `minitrainbench tp sequence` 分别补 toy MLP 与
+  sequence parallel correctness demo，能把 Megatron-style 并行讲得更完整。
+- `minitrainbench moe route` 提供 toy MoE routing / dispatch / combine 证据，和
+  all-to-all benchmark 对上实际通信形态。
+- `minitrainbench doctor` 检查 GPU、NCCL、网卡和 rendezvous 环境。
+- `minitrainbench fault smoke` 把 resume、half checkpoint、config mismatch 和 NaN 等
+  常见故障边界转成可复现 smoke。
 
 ## 环境
 
@@ -213,6 +226,21 @@ CPU/Gloo 也可以验证相同的切分语义：
 torchrun --standalone --nproc_per_node=2 -m minitrainbench tp check \
   --device cpu --backend gloo --batch-size 1 --seq-length 2 \
   --in-features 8 --out-features 8 --output results/tp_check_cpu.json
+```
+
+运行 toy MoE routing、TP MLP / Sequence Parallel 和故障恢复 smoke：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_moe_routing_smoke.sh
+IMAGE=minitrainbench:gpu scripts/run_tensor_parallel_smoke.sh
+IMAGE=minitrainbench:gpu scripts/run_fault_tolerance_smoke.sh
+```
+
+检查单机或多机 rendezvous / NCCL 环境：
+
+```bash
+python -m minitrainbench doctor --skip-connectivity --output results/doctor.json
+NODE_RANK=0 RDZV_ENDPOINT=10.0.0.1:29500 scripts/run_multinode_torchrun.sh
 ```
 
 验证 BF16、activation checkpointing 和 gradient accumulation 组合：

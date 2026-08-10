@@ -254,6 +254,95 @@ def test_cpu_profiler_smoke(tmp_path) -> None:
     assert (trace_dir / "profile_summary.md").is_file()
 
 
+def test_cpu_doctor_smoke(tmp_path) -> None:
+    output = tmp_path / "doctor.json"
+    _run_module(
+        "doctor",
+        "--device",
+        "cpu",
+        "--backend",
+        "gloo",
+        "--skip-connectivity",
+        "--output",
+        str(output),
+    )
+    result = json.loads(output.read_text())
+    assert result["benchmark"] == "doctor"
+    assert "diagnostics" in result
+    assert result["connectivity"]["status"] == "skipped"
+
+
+def test_cpu_moe_routing_smoke(tmp_path) -> None:
+    output = tmp_path / "moe.json"
+    _run_module(
+        "moe",
+        "route",
+        "--device",
+        "cpu",
+        "--backend",
+        "gloo",
+        "--tokens-per-rank",
+        "8",
+        "--hidden-size",
+        "8",
+        "--num-experts",
+        "4",
+        "--capacity-factor",
+        "1.25",
+        "--output",
+        str(output),
+    )
+    result = json.loads(output.read_text())
+    assert result["benchmark"] == "moe_routing"
+    assert result["status"] == "ok"
+    assert sum(result["expert_token_counts"]) + result["tokens_dropped"] == 8
+    assert result["top_k"] == 1
+
+
+def test_cpu_fault_tolerance_smoke(tmp_path) -> None:
+    output = tmp_path / "fault.json"
+    _run_module(
+        "fault",
+        "smoke",
+        "--device",
+        "cpu",
+        "--backend",
+        "gloo",
+        "--strategy",
+        "ddp",
+        "--precision",
+        "fp32",
+        "--batch-size",
+        "1",
+        "--seq-length",
+        "8",
+        "--vocab-size",
+        "64",
+        "--d-model",
+        "16",
+        "--n-heads",
+        "4",
+        "--n-layers",
+        "1",
+        "--dropout",
+        "0.2",
+        "--continuous-steps",
+        "2",
+        "--interrupted-steps",
+        "1",
+        "--resume-steps",
+        "1",
+        "--output",
+        str(output),
+        timeout=360,
+    )
+    result = json.loads(output.read_text())
+    assert result["benchmark"] == "fault_tolerance"
+    assert result["verification"]["exact_match"] is True
+    failure_types = {row["failure_type"] for row in result["failure_handling"]}
+    assert {"checkpoint_resume_exact", "config_mismatch", "half_checkpoint"} <= failure_types
+
+
 def test_repeat_conflicts_with_checkpoint_args(tmp_path) -> None:
     checkpoint_dir = tmp_path / "checkpoints"
     failed = subprocess.run(
@@ -712,6 +801,8 @@ def test_gloo_collectives_smoke(tmp_path) -> None:
 
 def test_tensor_parallel_cpu_check(tmp_path) -> None:
     output = tmp_path / "tp.json"
+    mlp_output = tmp_path / "tp_mlp.json"
+    sequence_output = tmp_path / "tp_sequence.json"
     environment = os.environ.copy()
     environment["OMP_NUM_THREADS"] = "1"
     completed = subprocess.run(
@@ -755,6 +846,86 @@ def test_tensor_parallel_cpu_check(tmp_path) -> None:
     assert result["forward_max_error"] <= 1e-3
     assert result["grad_max_error"] <= 1e-3
     assert "Column" not in completed.stderr
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nproc_per_node=2",
+            "--module",
+            "minitrainbench",
+            "tp",
+            "mlp",
+            "--device",
+            "cpu",
+            "--backend",
+            "gloo",
+            "--batch-size",
+            "1",
+            "--seq-length",
+            "2",
+            "--in-features",
+            "8",
+            "--hidden-features",
+            "16",
+            "--out-features",
+            "8",
+            "--atol",
+            "1e-3",
+            "--output",
+            str(mlp_output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=180,
+    )
+    mlp_result = json.loads(mlp_output.read_text())
+    assert mlp_result["benchmark"] == "tensor_parallel_mlp"
+    assert mlp_result["status"] == "ok"
+    assert mlp_result["collective_count"] == 2
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nproc_per_node=2",
+            "--module",
+            "minitrainbench",
+            "tp",
+            "sequence",
+            "--device",
+            "cpu",
+            "--backend",
+            "gloo",
+            "--batch-size",
+            "1",
+            "--seq-length",
+            "2",
+            "--hidden-size",
+            "8",
+            "--dropout",
+            "0.1",
+            "--atol",
+            "1e-3",
+            "--output",
+            str(sequence_output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=180,
+    )
+    sequence_result = json.loads(sequence_output.read_text())
+    assert sequence_result["benchmark"] == "sequence_parallel"
+    assert sequence_result["status"] == "ok"
+    assert sequence_result["collective_count"] == 3
 
 
 def test_report_renders_infra_metrics(tmp_path) -> None:
@@ -903,6 +1074,73 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
             "forward_max_error": 0.0,
             "grad_max_error": 0.0,
         },
+        "tp_mlp.json": {
+            "benchmark": "tensor_parallel_mlp",
+            "status": "ok",
+            "tp_degree": 2,
+            "device": "cpu",
+            "in_features": 8,
+            "hidden_features": 16,
+            "out_features": 8,
+            "forward_max_error": 0.0,
+            "grad_max_error": 0.0,
+            "collective_count": 2,
+            "communication_bytes": 128,
+        },
+        "sequence.json": {
+            "benchmark": "sequence_parallel",
+            "status": "ok",
+            "tp_degree": 2,
+            "device": "cpu",
+            "seq_length": 8,
+            "hidden_size": 16,
+            "forward_max_error": 0.0,
+            "grad_max_error": 0.0,
+            "collective_count": 3,
+            "communication_bytes": 256,
+        },
+        "fault.json": {
+            "benchmark": "fault_tolerance",
+            "failure_handling": [
+                {
+                    "failure_type": "checkpoint_resume_exact",
+                    "detection": "checkpoint verify",
+                    "auto_recovered": True,
+                    "recovered_checkpoint": "results/fault/resumed/step_00000002",
+                    "global_step": 2,
+                    "tokens_seen": 16,
+                    "status": "ok",
+                },
+                {
+                    "failure_type": "half_checkpoint",
+                    "detection": "latest/READY 扫描",
+                    "auto_recovered": True,
+                    "recovered_checkpoint": "step_00000002",
+                    "status": "ok",
+                },
+            ],
+        },
+        "doctor.json": {
+            "benchmark": "doctor",
+            "gpu_count": 0,
+            "cuda_available": False,
+            "nccl_version": None,
+            "connectivity": {"status": "skipped"},
+            "diagnostics": [{"level": "info", "check": "summary"}],
+        },
+        "moe.json": {
+            "benchmark": "moe_routing",
+            "status": "ok",
+            "world_size": 2,
+            "num_experts": 4,
+            "tokens_per_rank": 64,
+            "capacity_per_expert": 24,
+            "tokens_dropped": 1,
+            "load_imbalance_ratio": 1.2,
+            "load_balance_loss": 0.01,
+            "dispatch_time_ms": 0.2,
+            "combine_time_ms": 0.3,
+        },
     }
     paths = []
     for name, payload in payloads.items():
@@ -933,3 +1171,6 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
     assert "小规模 collective 更容易受延迟限制" in report
     assert "all-to-all 对应 MoE expert parallel" in report
     assert "Tensor Parallel 正确性" in report
+    assert "Megatron-style Toy Runtime 正确性" in report
+    assert "MoE Routing / Expert Parallel" in report
+    assert "Failure Handling" in report

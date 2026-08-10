@@ -310,6 +310,23 @@ Pipeline parallel 把不同 layer 放到不同 stage，但 micro-batch 进入和
 CUDA 计时要同步；多 rank 用 max step time；至少 repeat 多次报告均值和方差；区分训练
 吞吐与纯 collective microbenchmark；避免混用不同批次运行的结果。
 
+### 投 Seed 时怎么讲这个项目？
+
+可以按这条线讲：
+
+1. 我先做了一个最小训练 Runtime，把 DDP/FSDP、BF16、gradient accumulation、checkpoint/resume 和 PyTorch Profiler 串起来。
+2. 再补通信层证据，把 all-reduce、all-gather、reduce-scatter、all-to-all 以及 ZeRO 的差异拆开看。
+3. 然后加上故障恢复和正确性检查，让项目从 benchmark 变成能解释训练系统边界的最小框架。
+4. 最后用 doctor、多机 torchrun 模板、toy TP/MoE demo 和 CI smoke，把工程化和可复现性补齐。
+
+面试追问时可以主动强调边界：
+
+- 多机和真实 MoE 训练没有做成完整生产系统，但已经有诊断和通信证据链。
+- TP/PP/SP 只做 toy correctness 和 notes，没有把整个 Megatron runtime 重写一遍。
+- RLHF/GRPO、推理和编译器方向不在这次项目目标里。
+
+这样的讲法比较像训练框架岗位，而不是单纯的 benchmark 简介。
+
 ## 面试前自检
 
 - 能在 90 秒内讲清项目目标、架构和一条实测结论。

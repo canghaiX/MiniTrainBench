@@ -4,9 +4,16 @@ import argparse
 
 from .communication import communication_benchmark
 from .deepspeed_benchmark import deepspeed_benchmark
+from .doctor import run_doctor
+from .fault_tolerance import fault_tolerance_smoke
+from .moe_routing import moe_routing_benchmark
 from .profiler import profile_training
 from .report import write_report
-from .tensor_parallel import tensor_parallel_check
+from .tensor_parallel import (
+    tensor_parallel_check,
+    tensor_parallel_mlp_check,
+    tensor_parallel_sequence_check,
+)
 from .training import train
 from .verification import verify_checkpoints
 
@@ -59,6 +66,16 @@ def _validate_training_shape(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="minitrainbench")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    doctor_parser = subparsers.add_parser("doctor", help="检查多机/NCCL 运行环境")
+    _add_common_distributed_arguments(doctor_parser)
+    doctor_parser.add_argument("--master-addr", default=None)
+    doctor_parser.add_argument("--master-port", type=int, default=None)
+    doctor_parser.add_argument("--timeout", type=float, default=2.0)
+    doctor_parser.add_argument("--skip-connectivity", action="store_true")
+    doctor_parser.add_argument("--expected-world-size", type=int, default=0)
+    doctor_parser.add_argument("--expected-gpus", type=int, default=0)
+    doctor_parser.add_argument("--output", default=None)
 
     train_parser = subparsers.add_parser("train", help="运行 DDP 或 FSDP 训练 benchmark")
     _add_common_distributed_arguments(train_parser)
@@ -139,6 +156,70 @@ def build_parser() -> argparse.ArgumentParser:
     tp_check_parser.add_argument("--atol", type=float, default=1e-3)
     tp_check_parser.add_argument("--output", default=None)
 
+    tp_mlp_parser = tp_subparsers.add_parser(
+        "mlp",
+        help="验证 toy TP MLP 与单卡 reference 是否一致",
+    )
+    _add_common_distributed_arguments(tp_mlp_parser)
+    tp_mlp_parser.add_argument("--batch-size", type=int, default=2)
+    tp_mlp_parser.add_argument("--seq-length", type=int, default=8)
+    tp_mlp_parser.add_argument("--in-features", type=int, default=16)
+    tp_mlp_parser.add_argument("--hidden-features", type=int, default=64)
+    tp_mlp_parser.add_argument("--out-features", type=int, default=16)
+    tp_mlp_parser.add_argument("--seed", type=int, default=2026)
+    tp_mlp_parser.add_argument("--atol", type=float, default=1e-3)
+    tp_mlp_parser.add_argument("--output", default=None)
+
+    tp_sequence_parser = tp_subparsers.add_parser(
+        "sequence",
+        help="验证 toy sequence parallel LayerNorm/Dropout shard 语义",
+    )
+    _add_common_distributed_arguments(tp_sequence_parser)
+    tp_sequence_parser.add_argument("--batch-size", type=int, default=2)
+    tp_sequence_parser.add_argument("--seq-length", type=int, default=8)
+    tp_sequence_parser.add_argument("--hidden-size", type=int, default=16)
+    tp_sequence_parser.add_argument("--dropout", type=float, default=0.1)
+    tp_sequence_parser.add_argument("--seed", type=int, default=2026)
+    tp_sequence_parser.add_argument("--atol", type=float, default=1e-3)
+    tp_sequence_parser.add_argument("--output", default=None)
+
+    moe_parser = subparsers.add_parser("moe", help="运行 toy MoE routing/dispatch 检查")
+    moe_subparsers = moe_parser.add_subparsers(dest="moe_command", required=True)
+    moe_route_parser = moe_subparsers.add_parser(
+        "route",
+        help="运行 top-1 routing、capacity 和 all-to-all dispatch/combine demo",
+    )
+    _add_common_distributed_arguments(moe_route_parser)
+    moe_route_parser.add_argument("--tokens-per-rank", type=int, default=64)
+    moe_route_parser.add_argument("--hidden-size", type=int, default=32)
+    moe_route_parser.add_argument("--num-experts", type=int, default=4)
+    moe_route_parser.add_argument("--capacity-factor", type=float, default=1.25)
+    moe_route_parser.add_argument("--seed", type=int, default=2026)
+    moe_route_parser.add_argument("--output", default=None)
+
+    fault_parser = subparsers.add_parser("fault", help="运行训练稳定性和故障恢复 smoke")
+    fault_subparsers = fault_parser.add_subparsers(dest="fault_command", required=True)
+    fault_smoke_parser = fault_subparsers.add_parser(
+        "smoke",
+        help="生成 checkpoint/resume 与故障处理证据",
+    )
+    _add_common_distributed_arguments(fault_smoke_parser)
+    fault_smoke_parser.add_argument("--strategy", choices=["ddp", "fsdp"], default="ddp")
+    fault_smoke_parser.add_argument("--precision", choices=["fp32", "bf16"], default="fp32")
+    _add_common_model_arguments(fault_smoke_parser)
+    fault_smoke_parser.add_argument(
+        "--gradient-sync-mode",
+        choices=["auto", "every", "last"],
+        default="auto",
+    )
+    fault_smoke_parser.add_argument("--warmup-steps", type=int, default=0)
+    fault_smoke_parser.add_argument("--continuous-steps", type=int, default=3)
+    fault_smoke_parser.add_argument("--interrupted-steps", type=int, default=2)
+    fault_smoke_parser.add_argument("--resume-steps", type=int, default=1)
+    fault_smoke_parser.add_argument("--keep-last", type=int, default=0)
+    fault_smoke_parser.add_argument("--checkpoint-dir", default=None)
+    fault_smoke_parser.add_argument("--output", default=None)
+
     report_parser = subparsers.add_parser("report", help="将 JSON benchmark 结果渲染为 Markdown")
     report_parser.add_argument("--input", nargs="+", required=True)
     report_parser.add_argument("--output", default=None)
@@ -164,7 +245,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    if args.command == "train":
+    if args.command == "doctor":
+        if args.timeout <= 0 or args.expected_world_size < 0 or args.expected_gpus < 0:
+            raise SystemExit("timeout 必须大于 0；expected-* 不能为负数")
+        run_doctor(args)
+    elif args.command == "train":
         _validate_training_shape(args)
         if args.save_every < 0 or args.keep_last < 0:
             raise SystemExit("save-every 和 keep-last 不能为负数")
@@ -229,6 +314,78 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(str(error)) from None
         if result is not None and result["status"] != "ok":
             raise SystemExit("tensor parallel 正确性检查失败，详见输出 JSON")
+    elif args.command == "tp" and args.tp_command == "mlp":
+        if (
+            args.batch_size < 1
+            or args.seq_length < 1
+            or args.in_features < 1
+            or args.hidden_features < 1
+            or args.out_features < 1
+            or args.atol <= 0
+        ):
+            raise SystemExit(
+                "batch-size、seq-length、in-features、hidden-features 和 "
+                "out-features 必须为正数；atol 必须大于 0"
+            )
+        try:
+            result = tensor_parallel_mlp_check(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+        if result is not None and result["status"] != "ok":
+            raise SystemExit("TP MLP 正确性检查失败，详见输出 JSON")
+    elif args.command == "tp" and args.tp_command == "sequence":
+        if (
+            args.batch_size < 1
+            or args.seq_length < 1
+            or args.hidden_size < 1
+            or args.atol <= 0
+            or args.dropout < 0
+            or args.dropout >= 1
+        ):
+            raise SystemExit(
+                "batch-size、seq-length 和 hidden-size 必须为正数；"
+                "atol 必须大于 0；dropout 必须在 [0, 1) 范围内"
+            )
+        try:
+            result = tensor_parallel_sequence_check(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+        if result is not None and result["status"] != "ok":
+            raise SystemExit("Sequence Parallel 正确性检查失败，详见输出 JSON")
+    elif args.command == "moe" and args.moe_command == "route":
+        if (
+            args.tokens_per_rank < 1
+            or args.hidden_size < 1
+            or args.num_experts < 1
+            or args.capacity_factor <= 0
+        ):
+            raise SystemExit(
+                "tokens-per-rank、hidden-size、num-experts 必须为正数；"
+                "capacity-factor 必须大于 0"
+            )
+        try:
+            moe_routing_benchmark(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+    elif args.command == "fault" and args.fault_command == "smoke":
+        if (
+            args.grad_accum_steps < 1
+            or args.warmup_steps < 0
+            or args.continuous_steps < 2
+            or args.interrupted_steps < 1
+            or args.resume_steps < 1
+            or args.interrupted_steps + args.resume_steps != args.continuous_steps
+            or args.keep_last < 0
+        ):
+            raise SystemExit(
+                "fault smoke 要求 continuous-steps>=2，interrupted/resume steps 为正，"
+                "且 interrupted-steps + resume-steps 等于 continuous-steps；"
+                "warmup-steps 和 keep-last 不能为负数"
+            )
+        try:
+            fault_tolerance_smoke(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
     elif args.command == "report":
         print(write_report(args.input, args.output), end="")
     elif args.command == "checkpoint" and args.checkpoint_command == "verify":

@@ -66,6 +66,17 @@ def render_report(paths: list[str]) -> str:
     tensor_parallel = [
         item for item in payloads if item.get("benchmark") == "tensor_parallel"
     ]
+    tensor_parallel_mlp = [
+        item for item in payloads if item.get("benchmark") == "tensor_parallel_mlp"
+    ]
+    sequence_parallel = [
+        item for item in payloads if item.get("benchmark") == "sequence_parallel"
+    ]
+    moe_routing = [item for item in payloads if item.get("benchmark") == "moe_routing"]
+    fault_tolerance = [
+        item for item in payloads if item.get("benchmark") == "fault_tolerance"
+    ]
+    doctors = [item for item in payloads if item.get("benchmark") == "doctor"]
     by_strategy = {
         strategy: sorted(
             [item for item in training if item["strategy"] == strategy],
@@ -253,6 +264,134 @@ def render_report(paths: list[str]) -> str:
                 ),
             ]
         )
+    if tensor_parallel_mlp or sequence_parallel:
+        lines.extend(
+            [
+                "",
+                "### Megatron-style Toy Runtime 正确性",
+                "",
+                (
+                    "| 类型 | TP degree | Device | Shape | Forward max error | "
+                    "Grad max error | Collectives | 通信量估算 (bytes) | 状态 |"
+                ),
+                "| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for item in sorted(tensor_parallel_mlp, key=lambda row: row["tp_degree"]):
+            shape = (
+                f"{item['in_features']}->{item['hidden_features']}->"
+                f"{item['out_features']}"
+            )
+            lines.append(
+                f"| TP MLP | {item['tp_degree']} | {item['device']} | {shape} | "
+                f"{item['forward_max_error']:.6g} | {item['grad_max_error']:.6g} | "
+                f"{item['collective_count']} | {item['communication_bytes']} | "
+                f"{item['status']} |"
+            )
+        for item in sorted(sequence_parallel, key=lambda row: row["tp_degree"]):
+            shape = f"seq={item['seq_length']}, hidden={item['hidden_size']}"
+            lines.append(
+                f"| Sequence Parallel | {item['tp_degree']} | {item['device']} | "
+                f"{shape} | {item['forward_max_error']:.6g} | "
+                f"{item['grad_max_error']:.6g} | {item['collective_count']} | "
+                f"{item['communication_bytes']} | {item['status']} |"
+            )
+        lines.extend(
+            [
+                "",
+                (
+                    "TP MLP 展示 ColumnParallel + RowParallel 如何组成一段可反传的 "
+                    "Megatron-style MLP；Sequence Parallel 展示 LayerNorm/Dropout "
+                    "在 sequence shard 上的 correctness 边界。"
+                ),
+            ]
+        )
+    if moe_routing:
+        lines.extend(
+            [
+                "",
+                "### MoE Routing / Expert Parallel",
+                "",
+                (
+                    "| GPU 数 | Experts | Tokens/rank | Capacity | Drop tokens | "
+                    "Imbalance | Load-balance loss | Dispatch (ms) | Combine (ms) | 状态 |"
+                ),
+                "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for item in moe_routing:
+            lines.append(
+                f"| {item.get('world_size', '-')} | {item.get('num_experts', '-')} | "
+                f"{item.get('tokens_per_rank', '-')} | "
+                f"{item.get('capacity_per_expert', '-')} | "
+                f"{item.get('tokens_dropped', '-')} | "
+                f"{float(item.get('load_imbalance_ratio', 0.0)):.2f} | "
+                f"{float(item.get('load_balance_loss', 0.0)):.4f} | "
+                f"{float(item.get('dispatch_time_ms', 0.0)):.3f} | "
+                f"{float(item.get('combine_time_ms', 0.0)):.3f} | "
+                f"{item.get('status', '-')} |"
+            )
+        lines.extend(
+            [
+                "",
+                (
+                    "toy MoE routing 记录 top-1 router、capacity、overflow、负载不均衡和 "
+                    "dispatch/combine 通信，用于解释 expert parallel 的系统瓶颈。"
+                ),
+            ]
+        )
+    if fault_tolerance:
+        lines.extend(
+            [
+                "",
+                "### Failure Handling",
+                "",
+                (
+                    "| 故障类型 | 检测方式 | 自动恢复 | 恢复 checkpoint | "
+                    "Global step | Tokens seen | 状态 |"
+                ),
+                "| --- | --- | --- | --- | ---: | ---: | --- |",
+            ]
+        )
+        for item in fault_tolerance:
+            for row in item.get("failure_handling", []):
+                recovered = row.get("recovered_checkpoint") or "-"
+                lines.append(
+                    f"| {row.get('failure_type', '-')} | {row.get('detection', '-')} | "
+                    f"{_format_optional_bool(row.get('auto_recovered'))} | "
+                    f"{recovered} | {row.get('global_step', '-')} | "
+                    f"{row.get('tokens_seen', '-')} | {row.get('status', '-')} |"
+                )
+        lines.extend(
+            [
+                "",
+                (
+                    "该表覆盖最小故障模型：精确 resume、半成品 checkpoint 跳过、配置不匹配拒绝、"
+                    "NaN、rank crash 和通信 timeout 的检测边界。"
+                ),
+            ]
+        )
+    if doctors:
+        lines.extend(
+            [
+                "",
+                "### Doctor 环境诊断",
+                "",
+                "| GPU 数 | CUDA | NCCL | Connectivity | Diagnostics |",
+                "| ---: | --- | --- | --- | --- |",
+            ]
+        )
+        for item in doctors:
+            diagnostics = "; ".join(
+                f"{row['level']}:{row['check']}" for row in item.get("diagnostics", [])
+            )
+            lines.append(
+                f"| {item.get('gpu_count', '-')} | "
+                f"{_format_optional_bool(item.get('cuda_available'))} | "
+                f"{item.get('nccl_version') or '-'} | "
+                f"{item.get('connectivity', {}).get('status', '-')} | "
+                f"{diagnostics or '-'} |"
+            )
     return "\n".join(lines) + "\n"
 
 

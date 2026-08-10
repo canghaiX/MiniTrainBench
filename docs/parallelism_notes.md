@@ -1,7 +1,8 @@
 # Megatron-style 并行训练笔记
 
 本文档记录 Tensor Parallel、Pipeline Parallel 和 Sequence Parallel 的基本语义。项目当前
-只实现 toy tensor parallel correctness check，不实现完整 TP/PP/SP 训练 Runtime。
+实现 toy TP correctness、toy TP MLP 和 sequence parallel correctness demo，不实现完整
+TP/PP/SP 训练 Runtime。
 
 ## Tensor Parallel
 
@@ -55,7 +56,9 @@ Sequence Parallel 通常和 Tensor Parallel 配套。TP 已经把部分线性层
 activation 沿 sequence 维分片，降低每个 TP rank 的激活显存。
 
 SP 的代价是额外的 all-gather/reduce-scatter，以及对随机性、LayerNorm 统计和 dropout
-mask 的更严格管理。它适合长序列和大模型训练，但不适合作为本项目当前的最小实现。
+mask 的更严格管理。`minitrainbench tp sequence` 用 sequence shard 上的 LayerNorm、
+确定性 dropout、输出 all-gather 和参数梯度 all-reduce 做了最小 correctness 验证，但
+不包含完整 Megatron schedule 或长序列训练优化。
 
 ## 与本项目现有能力的关系
 
@@ -64,6 +67,8 @@ mask 的更严格管理。它适合长序列和大模型训练，但不适合作
 - ZeRO-2/3 分别分片 optimizer/gradient 和 parameter state。
 - MoE expert parallel 依赖 all-to-all token dispatch/combine。
 - Megatron TP 使用 intra-layer all-reduce/all-gather/reduce-scatter 来组合 shard。
+- toy TP MLP 展示 ColumnParallel + RowParallel 的 forward/backward 组合。
+- toy Sequence Parallel 展示 activation shard、dropout mask 和 LayerNorm 梯度聚合。
 
 这些并行维度可以组合成 3D/4D parallelism。MiniTrainBench 的定位不是复刻完整
 Megatron，而是用小而可验证的 demo 说明每类并行的通信语义和工程边界。

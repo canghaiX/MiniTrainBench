@@ -21,10 +21,10 @@ Profiler 和 DeepSpeed ZeRO 没有直接塞进 `Trainer` 主循环。`profile` �
 使用独立 adapter 运行 benchmark，不复用 DCP checkpoint/resume。这样核心 Runtime
 仍然聚焦 DDP/FSDP 的训练状态、同步策略和 checkpoint 正确性。
 
-MoE all-to-all benchmark 和 toy tensor parallel check 也保持独立入口。前者用于解释
-expert parallel 的 token dispatch/combine 通信路径，后者用于验证 Megatron-style
-Column/Row Parallel Linear 的切分语义。它们不接入当前 `Trainer`，避免把最小 Runtime
-扩展成不完整的 Megatron 复刻。
+MoE all-to-all benchmark、toy MoE routing、toy tensor parallel 和 doctor/fault smoke
+也保持独立入口。前者用于解释 expert parallel 的 token dispatch/combine 通信路径，
+TP/SP demo 用于验证 Megatron-style 切分语义，doctor/fault smoke 用于暴露环境和恢复
+边界。它们不接入当前 `Trainer`，避免把最小 Runtime 扩展成不完整的 Megatron 复刻。
 
 ## Strategy 生命周期
 
@@ -125,10 +125,20 @@ collective 线索。trace 文件通常较大，默认由 `.gitignore` 排除；�
 
 `minitrainbench comm` 现在包含 `all_to_all`，并支持 equal/uneven split。equal split
 用于观察均衡 dispatch 下的 collective 开销；uneven split 用于模拟 MoE router 导致的
-token 分布不均。该 benchmark 只测通信，不实现 router、capacity、expert MLP 或
-token combine kernel。
+token 分布不均。`minitrainbench moe route` 在此基础上补了 top-1 router、capacity、
+overflow、expert load 和 toy dispatch/combine，但仍不实现 grouped GEMM、完整 expert
+MLP 或 token combine kernel。
 
 `minitrainbench tp check` 只做 correctness：每个 rank 持有 Column/Row Parallel Linear
 的本地 shard，并与单卡 reference 比较 forward、input grad、weight grad 和 bias grad。
-它不实现完整 TP 训练循环、pipeline schedule 或 sequence parallel activation sharding。
+`minitrainbench tp mlp` 将 ColumnParallel 和 RowParallel 组合成可反传的 toy MLP；
+`minitrainbench tp sequence` 验证 sequence shard 上的 LayerNorm、确定性 dropout 和
+梯度聚合。它们仍不实现完整 TP 训练循环、pipeline schedule 或 Megatron optimizer。
 这样做的目的，是用最小代码证明切分语义正确，同时保留后续扩展空间。
+
+## 环境与故障边界
+
+`minitrainbench doctor` 检查 GPU、CUDA/NCCL、网卡、rendezvous 端口和当前分布式环境。
+`minitrainbench fault smoke` 则把精确 resume、半成品 checkpoint、配置不匹配、NaN、
+rank crash 和 communication timeout 的检测/恢复边界写成 JSON。它不替代生产调度器，
+但能在本地和 CI 中验证 Runtime 对常见故障的处理契约。
