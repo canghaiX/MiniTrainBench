@@ -25,7 +25,7 @@
     "warmup_steps": 2
   },
   "config_fingerprint": "901dc06a432ccde464c0c383f41116f07b879c1663913c3496b103e27278ced9",
-  "data_time_ms": 0.037671346217393875,
+  "data_time_ms": 0.05782758817076683,
   "device": "cuda:0",
   "environment": {
     "cuda": "13.0",
@@ -33,12 +33,12 @@
     "python": "3.10.12",
     "torch": "2.10.0+cu130"
   },
-  "forward_backward_ms": 12.366758659482002,
-  "global_batch_size": 2,
+  "forward_backward_ms": 15.7135648727417,
+  "global_batch_size": 16,
   "global_step": 7,
   "gradient_accumulation_steps": 1,
-  "loss": 79.96580505371094,
-  "max_cuda_memory_mb": 481.47314453125,
+  "loss": 74.74043273925781,
+  "max_cuda_memory_mb": 657.6826171875,
   "model_config": {
     "d_model": 512,
     "dropout": 0.0,
@@ -47,7 +47,7 @@
     "seq_length": 256,
     "vocab_size": 8192
   },
-  "optimizer_step_ms": 2.1492653526365757,
+  "optimizer_step_ms": 2.3644556999206543,
   "parameters": 23240704,
   "precision": "bf16",
   "repeat_count": 1,
@@ -64,13 +64,13 @@
     "resume_path": null,
     "seed": 1337,
     "strategy_impl": "DDPStrategy",
-    "tokens_seen": 3584
+    "tokens_seen": 28672
   },
-  "step_time_ms": 14.714993629604578,
+  "step_time_ms": 18.130395889282227,
   "steps": 5,
   "strategy": "ddp",
-  "tokens_per_sec": 34794.44251813505,
-  "tokens_seen": 3584,
+  "tokens_per_sec": 225918.9498681244,
+  "tokens_seen": 28672,
   "warmup_steps": 2,
-  "world_size": 1
+  "world_size": 8
 }

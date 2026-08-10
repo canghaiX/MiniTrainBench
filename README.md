@@ -17,7 +17,7 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 简历描述示例：
 
 > 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP 在
-> 1/2/4 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
+> 1/2/4/8 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
 > smoke test、可插拔训练策略、分布式 checkpoint/resume 和可复现 Markdown 报告。
 
 ## 训练框架能力点
@@ -68,15 +68,16 @@ python -m pip install -e .
 IMAGE=minitrainbench:gpu REPEAT=1 scripts/run_a100_matrix.sh
 ```
 
-脚本会顺序运行 1/2/4 卡 DDP、1/2/4 卡 FSDP、4 卡 NCCL collective，
+脚本会顺序运行 1/2/4/8 卡 DDP、1/2/4/8 卡 FSDP、8 卡 NCCL collective，
 并重新生成 `results/report.md`。如需更长实验，可以通过 `GPUS`、`STEPS`、
-`WARMUP_STEPS`、`REPEAT`、`OUT_DIR` 或模型规模相关环境变量覆盖默认配置。
+`WARMUP_STEPS`、`REPEAT`、`OUT_DIR`、`COMM_NPROC` 或模型规模相关环境变量覆盖
+默认配置。没有 8 卡时可使用 `GPUS="1 2 4" COMM_NPROC=4` 降级运行。
 
 按 GPU 数运行短版 DDP benchmark：
 
 ```bash
 mkdir -p results
-for n in 1 2 4; do
+for n in 1 2 4 8; do
   docker run --rm --gpus all --ipc=host --network=host \
     -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
     torchrun --standalone --nproc_per_node="$n" -m minitrainbench train \
@@ -90,7 +91,7 @@ done
 运行同口径 FSDP benchmark：
 
 ```bash
-for n in 1 2 4; do
+for n in 1 2 4 8; do
   docker run --rm --gpus all --ipc=host --network=host \
     -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
     torchrun --standalone --nproc_per_node="$n" -m minitrainbench train \
@@ -106,10 +107,10 @@ done
 ```bash
 docker run --rm --gpus all --ipc=host --network=host \
   -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
-  torchrun --standalone --nproc_per_node=4 -m minitrainbench comm \
+  torchrun --standalone --nproc_per_node=8 -m minitrainbench comm \
   --device cuda --backend nccl \
   --sizes 1024,1048576,16777216 --warmup 10 --iters 50 \
-  --output results/nccl_4gpu.json
+  --output results/nccl_8gpu.json
 ```
 
 验证 BF16、activation checkpointing 和 gradient accumulation 组合：
@@ -168,9 +169,10 @@ STRATEGY=ddp KEEP_LAST=1 scripts/run_runtime_resume_smoke.sh
 docker run --rm -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
   python -m minitrainbench report \
   --input results/ddp_1gpu.json results/ddp_2gpu.json \
-          results/ddp_4gpu.json results/fsdp_1gpu.json \
-          results/fsdp_2gpu.json results/fsdp_4gpu.json \
-          results/nccl_4gpu.json \
+          results/ddp_4gpu.json results/ddp_8gpu.json \
+          results/fsdp_1gpu.json results/fsdp_2gpu.json \
+          results/fsdp_4gpu.json results/fsdp_8gpu.json \
+          results/nccl_8gpu.json \
   --output results/report.md
 ```
 
@@ -183,45 +185,54 @@ sequence length 256、2 个 warmup step 和 5 个测量 step。
 
 | 策略 | GPU 数 | 精度 | Data (ms) | 前反向 (ms) | 优化器 (ms) | Tokens/sec | Step time (ms) | 最大显存 (MB) | 扩展效率 | 相对 DDP 显存节省 | 相对 DDP step 差值 (ms) | Repeats |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| ddp | 1 | bf16 | - | - | - | 30362.52 | 16.86 | 481.47 | 100.00% | - | - | 1 |
-| ddp | 2 | bf16 | - | - | - | 38857.41 | 26.35 | 567.13 | 63.99% | - | - | 1 |
-| ddp | 4 | bf16 | - | - | - | 85459.30 | 23.96 | 615.19 | 70.37% | - | - | 1 |
-| fsdp | 1 | bf16 | - | - | - | 15478.27 | 33.08 | 479.77 | 100.00% | 0.35% | 16.22 | 1 |
-| fsdp | 2 | bf16 | - | - | - | 29016.16 | 35.29 | 274.86 | 93.73% | 51.54% | 8.94 | 1 |
-| fsdp | 4 | bf16 | - | - | - | 16230.08 | 126.19 | 209.60 | 26.21% | 65.93% | 102.22 | 1 |
+| ddp | 1 | bf16 | 0.04 | 12.37 | 2.15 | 34794.44 | 14.71 | 481.47 | 100.00% | - | - | 1 |
+| ddp | 2 | bf16 | 0.06 | 15.40 | 2.34 | 56885.71 | 18.00 | 657.68 | 81.75% | - | - | 1 |
+| ddp | 4 | bf16 | 0.09 | 17.78 | 2.87 | 100828.95 | 20.31 | 615.19 | 72.45% | - | - | 1 |
+| ddp | 8 | bf16 | 0.06 | 15.71 | 2.36 | 225918.95 | 18.13 | 657.68 | 81.16% | - | - | 1 |
+| fsdp | 1 | bf16 | 0.05 | 30.15 | 2.56 | 15571.04 | 32.88 | 479.77 | 100.00% | 0.35% | 18.17 | 1 |
+| fsdp | 2 | bf16 | 0.05 | 33.41 | 1.33 | 29465.53 | 34.75 | 276.23 | 94.62% | 58.00% | 16.75 | 1 |
+| fsdp | 4 | bf16 | 0.07 | 35.71 | 1.15 | 56058.97 | 36.53 | 208.09 | 90.01% | 66.17% | 16.22 | 1 |
+| fsdp | 8 | bf16 | 0.06 | 32.29 | 0.92 | 124391.38 | 32.93 | 175.55 | 99.86% | 73.31% | 14.80 | 1 |
 
-4 卡 NCCL collective 结果：
+8 卡 NCCL collective 结果：
 
 | 操作 | 元素数 | 延迟 (ms) | 带宽 (GB/s) |
 | --- | ---: | ---: | ---: |
-| all_reduce | 1024 | 0.054 | 0.076 |
-| all_gather | 1024 | 0.135 | 0.122 |
-| reduce_scatter | 1024 | 0.061 | 0.269 |
-| all_reduce | 1048576 | 0.102 | 41.172 |
-| all_gather | 1048576 | 0.232 | 72.433 |
-| reduce_scatter | 1048576 | 0.129 | 129.768 |
-| all_reduce | 16777216 | 0.648 | 103.577 |
-| all_gather | 16777216 | 6.092 | 44.062 |
-| reduce_scatter | 16777216 | 1.818 | 147.652 |
+| all_reduce | 1024 | 0.052 | 0.080 |
+| all_gather | 1024 | 0.185 | 0.177 |
+| reduce_scatter | 1024 | 0.059 | 0.560 |
+| all_reduce | 1048576 | 0.117 | 35.822 |
+| all_gather | 1048576 | 0.347 | 96.739 |
+| reduce_scatter | 1048576 | 0.245 | 137.122 |
+| all_reduce | 16777216 | 0.724 | 92.734 |
+| all_gather | 16777216 | 3.349 | 160.314 |
+| reduce_scatter | 16777216 | 2.223 | 241.493 |
 
 ## 瓶颈分析
 
 DDP 会在每个 rank 上保留完整的模型参数、梯度和优化器状态。它的主要分布式
-开销来自梯度 all-reduce，因此在 1/2/4 卡实验中，显存从 481 MB 小幅上升到
-615 MB，同时吞吐从 30.4k tokens/sec 扩展到 85.5k tokens/sec。由于当前模型
-较小，2 卡结果受到额外同步开销影响，扩展效率不高。
+开销来自梯度 all-reduce。这个 8x A100 full-node 短跑中，DDP 从 1 卡的
+34.8k tokens/sec 扩展到 8 卡的 225.9k tokens/sec，扩展效率为 81.2%；最大显存
+则在 481-658 MB 区间。forward/backward 加 optimizer 时间在 8 卡约为 18.1 ms，
+说明当前 23.2M 小模型仍能在单节点内维持较高的扩展效率。
 
 FSDP 会分片参数、梯度和优化器状态，因此可以降低稳定状态下的显存占用；代价是
 在包裹的 Transformer block 周围引入参数 all-gather 和梯度 reduce-scatter
-通信。在这组短跑中，FSDP 将最大显存从 1 卡的 479.8 MB 降到 4 卡的
-209.6 MB，但 4 卡 step time 增长到 126.2 ms，因为模型太小，无法摊平
-每个 block 上 all-gather 和 reduce-scatter 的额外开销。因此这里更适合把
-FSDP 理解为显存扩展路径，而不是小模型吞吐优化路径。
+通信。在同一轮 8 卡实验中，FSDP 的最大显存从 1 卡的 479.8 MB 降到 175.5 MB，
+相对 8 卡 DDP 节省 73.3%；吞吐从 15.6k 提升到 124.4k tokens/sec，step time 为
+32.9 ms。它仍慢于 DDP，但相对 1 卡的扩展效率接近 100%，说明完整节点上的分片
+收益能够摊薄部分通信成本。对更大模型，FSDP 的显存优势通常会更重要。
+
+8 卡 NCCL 结果进一步解释了这个取舍：1024 元素的小 collective 仍受固定延迟限制；
+16M 元素时 all-reduce、all-gather、reduce-scatter 分别达到 92.7、160.3、241.5
+GB/s。FSDP 的 all-gather/reduce-scatter 在大 tensor 下有较高带宽，但每个 block
+重复触发 collective，仍会给小模型带来可见的调度和同步开销。
 
 可以结合通信 JSON 分析 collective 延迟、带宽和训练 step time 的关系。比较结果时
 应保持模型、精度、local batch、sequence length、warmup 和测量 step 数一致。
 activation checkpointing 通过额外重计算换取更低 activation 显存；gradient
-accumulation 则通过在同步点之间累积更多计算，减少优化器更新频率。
+accumulation 则通过在同步点之间累积更多计算，减少优化器更新频率。当前表格只跑了
+`repeat=1`，适合展示 full-node 覆盖；用于严谨性能结论时应使用 `REPEAT=3` 或更高。
 
 ## 训练 Runtime 设计
 

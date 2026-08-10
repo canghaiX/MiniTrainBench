@@ -2,7 +2,8 @@
 set -euo pipefail
 
 IMAGE="${IMAGE:-minitrainbench:gpu}"
-GPUS="${GPUS:-1 2 4}"
+GPUS="${GPUS:-1 2 4 8}"
+COMM_NPROC="${COMM_NPROC:-8}"
 STEPS="${STEPS:-5}"
 WARMUP_STEPS="${WARMUP_STEPS:-2}"
 REPEAT="${REPEAT:-1}"
@@ -49,13 +50,13 @@ for nproc in ${GPUS}; do
   run_train fsdp "${nproc}"
 done
 
-docker_run torchrun --standalone --nproc_per_node=4 -m minitrainbench comm \
+docker_run torchrun --standalone --nproc_per_node="${COMM_NPROC}" -m minitrainbench comm \
   --device cuda \
   --backend nccl \
   --sizes 1024,1048576,16777216 \
   --warmup 10 \
   --iters 50 \
-  --output "/workspace/${OUT_DIR}/nccl_4gpu.json"
+  --output "/workspace/${OUT_DIR}/nccl_${COMM_NPROC}gpu.json"
 
 inputs=()
 for nproc in ${GPUS}; do
@@ -64,7 +65,7 @@ done
 for nproc in ${GPUS}; do
   inputs+=("${OUT_DIR}/fsdp_${nproc}gpu.json")
 done
-inputs+=("${OUT_DIR}/nccl_4gpu.json")
+inputs+=("${OUT_DIR}/nccl_${COMM_NPROC}gpu.json")
 
 docker_run python3 -m minitrainbench report \
   --input "${inputs[@]}" \
