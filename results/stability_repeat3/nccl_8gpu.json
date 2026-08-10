@@ -1,0 +1,296 @@
+{
+  "all_to_all_mode": "both",
+  "backend": "nccl",
+  "benchmark": "communication",
+  "device": "cuda:0",
+  "dtype": "float32",
+  "iters": 50,
+  "operations": [
+    "all_reduce",
+    "all_gather",
+    "reduce_scatter",
+    "all_to_all"
+  ],
+  "results": [
+    {
+      "bandwidth_gbps": 0.0913049749288491,
+      "bytes": 4096,
+      "elements": 1024,
+      "latency_ms": 0.04486064426600933,
+      "operation": "all_reduce",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 0.16330252986847235,
+      "bytes": 32768,
+      "elements": 1024,
+      "latency_ms": 0.2006582508329302,
+      "operation": "all_gather",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 0.5579584916276171,
+      "bytes": 32768,
+      "elements": 1024,
+      "latency_ms": 0.05872838301002048,
+      "operation": "reduce_scatter",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 0.47059837528504567,
+      "bytes": 32768,
+      "elements": 1024,
+      "elements_per_peer": 1024,
+      "input_splits": [
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "latency_ms": 0.06963049963815138,
+      "operation": "all_to_all",
+      "output_splits": [
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 8192,
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 0.5520022009469998,
+      "bytes": 32880,
+      "elements": 1024,
+      "elements_per_peer": 1024,
+      "input_splits": [
+        1024,
+        1025,
+        1026,
+        1027,
+        1028,
+        1029,
+        1030,
+        1031
+      ],
+      "latency_ms": 0.059564979892456904,
+      "operation": "all_to_all",
+      "output_splits": [
+        1024,
+        1025,
+        1026,
+        1027,
+        1028,
+        1029,
+        1030,
+        1031
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 8220,
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 35.73409126813356,
+      "bytes": 4194304,
+      "elements": 1048576,
+      "latency_ms": 0.11737542081391439,
+      "operation": "all_reduce",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 100.45182041083383,
+      "bytes": 33554432,
+      "elements": 1048576,
+      "latency_ms": 0.3340350813232362,
+      "operation": "all_gather",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 137.76933448601184,
+      "bytes": 33554432,
+      "elements": 1048576,
+      "latency_ms": 0.24355515779461712,
+      "operation": "reduce_scatter",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 157.1442431721046,
+      "bytes": 33554432,
+      "elements": 1048576,
+      "elements_per_peer": 1048576,
+      "input_splits": [
+        1048576,
+        1048576,
+        1048576,
+        1048576,
+        1048576,
+        1048576,
+        1048576,
+        1048576
+      ],
+      "latency_ms": 0.21352632029447705,
+      "operation": "all_to_all",
+      "output_splits": [
+        1048576,
+        1048576,
+        1048576,
+        1048576,
+        1048576,
+        1048576,
+        1048576,
+        1048576
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 8388608,
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 68.17061003091375,
+      "bytes": 33554544,
+      "elements": 1048576,
+      "elements_per_peer": 1048576,
+      "input_splits": [
+        1048576,
+        1048577,
+        1048578,
+        1048579,
+        1048580,
+        1048581,
+        1048582,
+        1048583
+      ],
+      "latency_ms": 0.49221422523260117,
+      "operation": "all_to_all",
+      "output_splits": [
+        1048576,
+        1048577,
+        1048578,
+        1048579,
+        1048580,
+        1048581,
+        1048582,
+        1048583
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 8388636,
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 93.11504307747086,
+      "bytes": 67108864,
+      "elements": 16777216,
+      "latency_ms": 0.7207091548480093,
+      "operation": "all_reduce",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 162.4300949508481,
+      "bytes": 536870912,
+      "elements": 16777216,
+      "latency_ms": 3.3052428625524044,
+      "operation": "all_gather",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 242.54022426018554,
+      "bytes": 536870912,
+      "elements": 16777216,
+      "latency_ms": 2.213533502072096,
+      "operation": "reduce_scatter",
+      "status": "ok",
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 221.119162499098,
+      "bytes": 536870912,
+      "elements": 16777216,
+      "elements_per_peer": 16777216,
+      "input_splits": [
+        16777216,
+        16777216,
+        16777216,
+        16777216,
+        16777216,
+        16777216,
+        16777216,
+        16777216
+      ],
+      "latency_ms": 2.427970990538597,
+      "operation": "all_to_all",
+      "output_splits": [
+        16777216,
+        16777216,
+        16777216,
+        16777216,
+        16777216,
+        16777216,
+        16777216,
+        16777216
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 134217728,
+      "world_size": 8
+    },
+    {
+      "bandwidth_gbps": 78.21948596099097,
+      "bytes": 536871024,
+      "elements": 16777216,
+      "elements_per_peer": 16777216,
+      "input_splits": [
+        16777216,
+        16777217,
+        16777218,
+        16777219,
+        16777220,
+        16777221,
+        16777222,
+        16777223
+      ],
+      "latency_ms": 6.863648071885109,
+      "operation": "all_to_all",
+      "output_splits": [
+        16777216,
+        16777217,
+        16777218,
+        16777219,
+        16777220,
+        16777221,
+        16777222,
+        16777223
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 134217756,
+      "world_size": 8
+    }
+  ],
+  "sizes": [
+    1024,
+    1048576,
+    16777216
+  ],
+  "warmup": 10,
+  "world_size": 8
+}

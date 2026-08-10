@@ -34,6 +34,17 @@ Runtime 契约。
 | Report | 吞吐、step time、显存、扩展效率、Runtime 状态 | 让实验结论可读、可复现 |
 | CI | CPU PyTorch + Gloo smoke | 不依赖 GPU 也能守住核心契约 |
 
+## 如何解释能力矩阵边界
+
+README 顶部的能力矩阵要主动讲成“范围控制”，而不是“没来得及做”。当前项目聚焦
+pretraining runtime 和单节点分布式 infra：DDP/FSDP/ZeRO、checkpoint/resume、
+profiler、collective、MoE all-to-all 和 toy TP 都有可运行证据。Multi-node 没做，是因为
+没有稳定多机资源时很难提交可信的 rdvz、hostfile、跨节点 NCCL 结果；RLHF/GRPO 没做，
+是因为它们属于 post-training pipeline，和本项目的训练 Runtime/通信性能主线不同。
+
+面试时可以这样说：我把仓库边界写清楚，是为了让 reviewer 快速知道哪些能力已经实现并
+benchmark，哪些属于后续扩展，而不是把不完整的多机或 RLHF demo 混进主项目。
+
 ## 真实遇到的问题与解决方式
 
 ### 1. Gradient accumulation 没有自动减少 DDP 通信

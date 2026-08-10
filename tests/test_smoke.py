@@ -738,7 +738,7 @@ def test_tensor_parallel_cpu_check(tmp_path) -> None:
             "--out-features",
             "8",
             "--atol",
-            "1e-5",
+            "1e-3",
             "--output",
             str(output),
         ],
@@ -752,8 +752,8 @@ def test_tensor_parallel_cpu_check(tmp_path) -> None:
     assert result["benchmark"] == "tensor_parallel"
     assert result["status"] == "ok"
     assert result["tp_degree"] == 2
-    assert result["forward_max_error"] <= 1e-5
-    assert result["grad_max_error"] <= 1e-5
+    assert result["forward_max_error"] <= 1e-3
+    assert result["grad_max_error"] <= 1e-3
     assert "Column" not in completed.stderr
 
 

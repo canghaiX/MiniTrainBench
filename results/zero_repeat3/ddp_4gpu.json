@@ -1,0 +1,166 @@
+{
+  "activation_checkpointing": false,
+  "backend": "nccl",
+  "batch_size_per_rank": 2,
+  "benchmark": "training",
+  "config": {
+    "activation_checkpointing": false,
+    "backend": "nccl",
+    "batch_size": 2,
+    "d_model": 512,
+    "device": "cuda:0",
+    "dropout": 0.0,
+    "grad_accum_steps": 1,
+    "gradient_sync_mode": "auto",
+    "keep_last": 3,
+    "learning_rate": 0.0003,
+    "n_heads": 8,
+    "n_layers": 6,
+    "precision": "bf16",
+    "repeat": 3,
+    "seed": 1337,
+    "seq_length": 256,
+    "steps": 20,
+    "strategy": "ddp",
+    "vocab_size": 8192,
+    "warmup_steps": 5
+  },
+  "config_fingerprint": "7733b9baf4c26326dbdd53a783e047d879ecaee89c81c6d809eb888bf7dbfc2f",
+  "data_time_ms": 0.04093914727369944,
+  "device": "cuda:0",
+  "environment": {
+    "cuda": "13.0",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "python": "3.10.12",
+    "torch": "2.10.0+cu130"
+  },
+  "forward_backward_ms": 14.777175585428873,
+  "global_batch_size": 8,
+  "global_step": 25,
+  "gradient_accumulation_steps": 1,
+  "gradient_sync_mode": "auto",
+  "loss": 49.4544563293457,
+  "max_cuda_memory_mb": 660.4163411458334,
+  "model_config": {
+    "d_model": 512,
+    "dropout": 0.0,
+    "n_heads": 8,
+    "n_layers": 6,
+    "seq_length": 256,
+    "vocab_size": 8192
+  },
+  "optimizer_step_ms": 2.185631195704142,
+  "parameters": 23240704,
+  "precision": "bf16",
+  "repeat_count": 3,
+  "repeats": [
+    {
+      "data_time_ms": 0.04426511004567146,
+      "forward_backward_ms": 14.96761703491211,
+      "global_step": 25,
+      "loss": 49.4544563293457,
+      "max_cuda_memory_mb": 657.6826171875,
+      "optimizer_step_ms": 2.179683208465576,
+      "repeat_index": 0,
+      "step_time_ms": 17.339252471923828,
+      "tokens_per_sec": 118113.51171661957,
+      "tokens_seen": 51200,
+      "trial_protocol": "independent_reinitialize"
+    },
+    {
+      "data_time_ms": 0.038083385676145554,
+      "forward_backward_ms": 14.565180778503418,
+      "global_step": 25,
+      "loss": 49.4544563293457,
+      "max_cuda_memory_mb": 661.5615234375,
+      "optimizer_step_ms": 2.149522066116333,
+      "repeat_index": 1,
+      "step_time_ms": 16.84195327758789,
+      "tokens_per_sec": 121601.09734571804,
+      "tokens_seen": 51200,
+      "trial_protocol": "independent_reinitialize"
+    },
+    {
+      "data_time_ms": 0.04046894609928131,
+      "forward_backward_ms": 14.798728942871094,
+      "global_step": 25,
+      "loss": 49.4544563293457,
+      "max_cuda_memory_mb": 662.0048828125,
+      "optimizer_step_ms": 2.2276883125305176,
+      "repeat_index": 2,
+      "step_time_ms": 17.090747833251953,
+      "tokens_per_sec": 119830.91787331786,
+      "tokens_seen": 51200,
+      "trial_protocol": "independent_reinitialize"
+    }
+  ],
+  "resolved_gradient_sync_mode": "last",
+  "runtime": {
+    "checkpoint_dir": null,
+    "config_fingerprint": "7733b9baf4c26326dbdd53a783e047d879ecaee89c81c6d809eb888bf7dbfc2f",
+    "global_step": 25,
+    "gradient_sync_mode": "auto",
+    "keep_last": 3,
+    "last_checkpoint": null,
+    "latest_checkpoint": null,
+    "micro_step": 0,
+    "ready_checkpoints": 0,
+    "resolved_gradient_sync_mode": "last",
+    "resume": false,
+    "resume_determinism_reason": "not_resumed",
+    "resume_deterministic": null,
+    "resume_path": null,
+    "seed": 1337,
+    "strategy_impl": "DDPStrategy",
+    "synchronized_microbatches_per_step": 1,
+    "tokens_seen": 51200,
+    "trial_protocol": "independent_reinitialize"
+  },
+  "step_time_ms": 17.09065119425456,
+  "steps": 20,
+  "strategy": "ddp",
+  "summary": {
+    "data_time_ms": {
+      "max": 0.04426511004567146,
+      "mean": 0.04093914727369944,
+      "min": 0.038083385676145554,
+      "std": 0.002545485664664115
+    },
+    "forward_backward_ms": {
+      "max": 14.96761703491211,
+      "mean": 14.777175585428873,
+      "min": 14.565180778503418,
+      "std": 0.164999283899122
+    },
+    "max_cuda_memory_mb": {
+      "max": 662.0048828125,
+      "mean": 660.4163411458334,
+      "min": 657.6826171875,
+      "std": 1.9414903028557466
+    },
+    "optimizer_step_ms": {
+      "max": 2.2276883125305176,
+      "mean": 2.185631195704142,
+      "min": 2.149522066116333,
+      "std": 0.03218720691789793
+    },
+    "step_time_ms": {
+      "max": 17.339252471923828,
+      "mean": 17.09065119425456,
+      "min": 16.84195327758789,
+      "std": 0.20302155743683148
+    },
+    "tokens_per_sec": {
+      "max": 121601.09734571804,
+      "mean": 119848.50897855182,
+      "min": 118113.51171661957,
+      "std": 1423.8552045558217
+    }
+  },
+  "synchronized_microbatches_per_step": 1,
+  "tokens_per_sec": 119848.50897855182,
+  "tokens_seen": 51200,
+  "trial_protocol": "independent_reinitialize",
+  "warmup_steps": 5,
+  "world_size": 4
+}

@@ -1,0 +1,164 @@
+{
+  "all_to_all_mode": "both",
+  "backend": "nccl",
+  "benchmark": "communication",
+  "device": "cuda:0",
+  "dtype": "float32",
+  "iters": 50,
+  "operations": [
+    "all_to_all"
+  ],
+  "results": [
+    {
+      "bandwidth_gbps": 0.1629700452727355,
+      "bytes": 16384,
+      "elements": 1024,
+      "elements_per_peer": 1024,
+      "input_splits": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "latency_ms": 0.10053381265606731,
+      "operation": "all_to_all",
+      "output_splits": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 4096,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 0.2526460408079588,
+      "bytes": 16408,
+      "elements": 1024,
+      "elements_per_peer": 1024,
+      "input_splits": [
+        1024,
+        1025,
+        1026,
+        1027
+      ],
+      "latency_ms": 0.06494461558759212,
+      "operation": "all_to_all",
+      "output_splits": [
+        1024,
+        1025,
+        1026,
+        1027
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 4102,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 133.48335560023344,
+      "bytes": 16777216,
+      "elements": 1048576,
+      "elements_per_peer": 1048576,
+      "input_splits": [
+        1048576,
+        1048576,
+        1048576,
+        1048576
+      ],
+      "latency_ms": 0.12568770034704357,
+      "operation": "all_to_all",
+      "output_splits": [
+        1048576,
+        1048576,
+        1048576,
+        1048576
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 4194304,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 55.486474300459925,
+      "bytes": 16777240,
+      "elements": 1048576,
+      "elements_per_peer": 1048576,
+      "input_splits": [
+        1048576,
+        1048577,
+        1048578,
+        1048579
+      ],
+      "latency_ms": 0.3023663011845201,
+      "operation": "all_to_all",
+      "output_splits": [
+        1048576,
+        1048577,
+        1048578,
+        1048579
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 4194310,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 222.277780272583,
+      "bytes": 268435456,
+      "elements": 16777216,
+      "elements_per_peer": 16777216,
+      "input_splits": [
+        16777216,
+        16777216,
+        16777216,
+        16777216
+      ],
+      "latency_ms": 1.2076576240360737,
+      "operation": "all_to_all",
+      "output_splits": [
+        16777216,
+        16777216,
+        16777216,
+        16777216
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 67108864,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 96.09950414836023,
+      "bytes": 268435480,
+      "elements": 16777216,
+      "elements_per_peer": 16777216,
+      "input_splits": [
+        16777216,
+        16777217,
+        16777218,
+        16777219
+      ],
+      "latency_ms": 2.793307648971677,
+      "operation": "all_to_all",
+      "output_splits": [
+        16777216,
+        16777217,
+        16777218,
+        16777219
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 67108870,
+      "world_size": 4
+    }
+  ],
+  "sizes": [
+    1024,
+    1048576,
+    16777216
+  ],
+  "warmup": 10,
+  "world_size": 4
+}

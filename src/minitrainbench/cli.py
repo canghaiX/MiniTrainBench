@@ -136,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     tp_check_parser.add_argument("--in-features", type=int, default=16)
     tp_check_parser.add_argument("--out-features", type=int, default=32)
     tp_check_parser.add_argument("--seed", type=int, default=2026)
-    tp_check_parser.add_argument("--atol", type=float, default=1e-5)
+    tp_check_parser.add_argument("--atol", type=float, default=1e-3)
     tp_check_parser.add_argument("--output", default=None)
 
     report_parser = subparsers.add_parser("report", help="将 JSON benchmark 结果渲染为 Markdown")

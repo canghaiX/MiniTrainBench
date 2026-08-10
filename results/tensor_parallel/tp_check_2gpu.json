@@ -1,0 +1,25 @@
+{
+  "atol": 0.001,
+  "backend": "nccl",
+  "batch_size": 2,
+  "benchmark": "tensor_parallel",
+  "device": "cuda:0",
+  "errors": {
+    "column_bias_grad": 0.0,
+    "column_forward": 0.0,
+    "column_input_grad": 0.0001373291015625,
+    "column_weight_grad": 0.0,
+    "row_bias_grad": 0.0,
+    "row_forward": 3.814697265625e-05,
+    "row_input_grad": 0.00011444091796875,
+    "row_weight_grad": 0.0
+  },
+  "forward_max_error": 3.814697265625e-05,
+  "grad_max_error": 0.0001373291015625,
+  "in_features": 1024,
+  "out_features": 4096,
+  "seed": 2026,
+  "seq_length": 8,
+  "status": "ok",
+  "tp_degree": 2
+}

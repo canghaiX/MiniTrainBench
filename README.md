@@ -7,6 +7,19 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 MoE/expert parallel 通信笔记见 [MoE 训练笔记](docs/moe_training_notes.md)，
 Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md)。
 
+## 能力矩阵
+
+| 方向 | 状态 | 仓库证据 |
+| --- | --- | --- |
+| DDP/FSDP | implemented + benchmarked | 1/2/4/8 卡训练结果、repeat=3 稳定性矩阵 |
+| DeepSpeed ZeRO | benchmark adapter | ZeRO-2/ZeRO-3 与 DDP baseline 同表对比 |
+| Checkpoint/resume | DDP/FSDP implemented | DCP、READY/latest、RNG state、`checkpoint verify` |
+| Profiler | implemented | PyTorch Profiler summary 已提交，原始 trace 不提交 |
+| MoE | all-to-all microbenchmark + notes | equal/uneven split、MoE token dispatch 设计笔记 |
+| Tensor Parallel | toy correctness check + notes | Column/Row Parallel Linear forward/backward 校验 |
+| Multi-node | not implemented | 当前聚焦单节点 8x A100 |
+| RLHF/GRPO | not implemented | 当前聚焦 pretraining runtime / distributed infra |
+
 ## 面向训练基础设施的能力展示
 
 - 使用 DDP、FSDP、DeepSpeed ZeRO、NCCL 和 Gloo 的分布式训练启动与运行方式。
@@ -121,6 +134,14 @@ IMAGE=minitrainbench:gpu scripts/run_a100_stability_matrix.sh
 `warmup_steps=5`、`steps=20`、`repeat=3`，结果写到
 `results/stability_repeat3/`。每个 repeat 都会重新初始化模型、optimizer 和
 deterministic synthetic iterator，报告中主指标渲染为 `mean ± std`。
+
+本仓库提交的结果证据目录：
+
+- `results/stability_repeat3/report.md`：DDP/FSDP 1/2/4/8 卡 repeat=3 稳定性矩阵。
+- `results/zero_repeat3/report.md`：DDP baseline、DeepSpeed ZeRO-2、ZeRO-3 repeat=3 对比。
+- `results/moe_comm/report.md`：2/4/8 卡 all-to-all equal/uneven 通信结果。
+- `results/tensor_parallel/report.md`：toy Tensor Parallel correctness check。
+- `results/profile/profile_summary.md`：DDP/FSDP PyTorch Profiler 摘要；原始 trace 被 `.gitignore` 排除。
 
 按 GPU 数运行短版 DDP benchmark：
 

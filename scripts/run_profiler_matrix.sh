@@ -48,6 +48,7 @@ run_profile ddp
 run_profile fsdp
 
 python3 - <<PY
+import json
 from pathlib import Path
 
 out_dir = Path("${OUT_DIR}")
@@ -56,6 +57,11 @@ trace_dirs = [
     out_dir / f"fsdp_${NPROC}gpu",
 ]
 parts = ["# MiniTrainBench Profiler 汇总", ""]
+payload = {
+    "benchmark": "profile_matrix",
+    "nproc": int("${NPROC}"),
+    "profiles": [],
+}
 for trace_dir in trace_dirs:
     summary = trace_dir / "profile_summary.md"
     if summary.is_file():
@@ -63,9 +69,17 @@ for trace_dir in trace_dirs:
         parts.append("")
         parts.append(summary.read_text())
         parts.append("")
+    summary_json = trace_dir / "profile_summary.json"
+    if summary_json.is_file():
+        payload["profiles"].append(json.loads(summary_json.read_text()))
+summary_md = out_dir / "profile_summary.md"
+summary_json = out_dir / "profile_summary.json"
 report = out_dir / "report.md"
-report.write_text("\n".join(parts))
-print(report)
+summary_text = "\n".join(parts).rstrip() + "\n"
+summary_md.write_text(summary_text)
+summary_json.write_text(json.dumps(payload, indent=2, sort_keys=True))
+report.write_text(summary_text)
+print(summary_md)
 PY
 
-printf 'Profiler 汇总结果: %s\n' "${OUT_DIR}/report.md"
+printf 'Profiler 汇总结果: %s\n' "${OUT_DIR}/profile_summary.md"
