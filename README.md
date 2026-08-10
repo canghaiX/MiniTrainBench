@@ -3,6 +3,8 @@
 MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark，
 用于对比 PyTorch DDP 和 FSDP。项目使用合成 token 数据，因此不依赖数据集下载。
 
+面试复盘和训练 Infra 高频问题见 [项目复盘与面试指南](docs/interview_guide.md)。
+
 ## 面向训练基础设施的能力展示
 
 - 使用 DDP、FSDP、NCCL 和 Gloo 的 PyTorch distributed 启动与运行方式。
