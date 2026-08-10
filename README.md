@@ -10,6 +10,7 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 - 覆盖 all-reduce、all-gather、reduce-scatter 的通信 microbenchmark。
 - 实现最小训练 Runtime：`TrainingConfig`、`TrainState`、`StepMetrics`、`Trainer`、
   deterministic synthetic data、distributed checkpoint/resume。
+- 使用可插拔 strategy 抽象隔离 DDP/FSDP 包装逻辑，并支持 checkpoint retention。
 - 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
 - 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
@@ -17,7 +18,20 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 
 > 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP 在
 > 1/2/4 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
-> smoke test、分布式 checkpoint/resume 和可复现 Markdown 报告。
+> smoke test、可插拔训练策略、分布式 checkpoint/resume 和可复现 Markdown 报告。
+
+## 训练框架能力点
+
+- `TrainingStrategy` registry 将 DDP/FSDP 的模型包装、进程组需求和策略名称从
+  `Trainer` 中拆出，贴近训练框架里的 strategy/plugin 设计。
+- checkpoint 生命周期包含临时目录、DCP 保存、`metadata.json`、中文
+  `metadata_zh.md`、`READY` 标记、`latest` 指针和恢复配置校验。
+- `--keep-last` 支持只保留最近 N 个 READY checkpoint；pruning 在新 checkpoint
+  完整发布后执行，避免删除唯一可恢复点。
+- `--resume latest` 会优先读取 `latest` 指针；如果指针损坏或指向半成品目录，
+  Runtime 会扫描 `step_*` 并跳过没有 `READY` 的目录。
+- `scripts/run_runtime_resume_smoke.sh` 提供 preemption/resume 复现实验：先保存，
+  再从 latest checkpoint 继续训练。
 
 ## 环境
 
@@ -121,7 +135,7 @@ docker run --rm --gpus all --ipc=host --network=host \
   --batch-size 2 --seq-length 256 \
   --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 \
   --steps 4 --warmup-steps 1 \
-  --checkpoint-dir results/runtime_ckpt/ddp_2gpu --save-every 2 \
+  --checkpoint-dir results/runtime_ckpt/ddp_2gpu --save-every 2 --keep-last 3 \
   --output results/ddp_2gpu_ckpt.json
 
 docker run --rm --gpus all --ipc=host --network=host \
@@ -131,8 +145,21 @@ docker run --rm --gpus all --ipc=host --network=host \
   --batch-size 2 --seq-length 256 \
   --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 \
   --steps 2 --warmup-steps 0 \
-  --checkpoint-dir results/runtime_ckpt/ddp_2gpu --resume latest --save-every 2 \
+  --checkpoint-dir results/runtime_ckpt/ddp_2gpu --resume latest \
+  --save-every 2 --keep-last 3 \
   --output results/ddp_2gpu_resume.json
+```
+
+运行默认 2 卡 FSDP/BF16 preemption/resume smoke：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_runtime_resume_smoke.sh
+```
+
+如需切到 DDP 或调整保留策略：
+
+```bash
+STRATEGY=ddp KEEP_LAST=1 scripts/run_runtime_resume_smoke.sh
 ```
 
 从保存的 JSON 结果生成 Markdown 报告：
@@ -203,6 +230,11 @@ accumulation 则通过在同步点之间累积更多计算，减少优化器更�
 记录 `global_step`、`micro_step`、`tokens_seen`、seed 与配置 fingerprint；
 `StepMetrics` 拆分 data、forward/backward、optimizer 和整体 step time。
 
+`TrainingStrategy` 是 `Trainer` 使用的策略插件接口。当前 registry 内置
+`DDPStrategy` 和 `FSDPStrategy`，分别负责声明是否需要初始化进程组，以及如何
+包装模型。这样后续扩展 ZeRO、设备后端或实验性 wrapper 时，不需要继续膨胀
+`Trainer` 主循环。
+
 synthetic token 数据按 `seed + global_step + rank` 的确定性规则生成。恢复训练时，
 Runtime 从 checkpoint 中的 `global_step` 继续生成下一个 batch，避免重复消费或
 跳过 synthetic step。
@@ -217,6 +249,10 @@ DDP 与 FSDP 走同一套保存/加载入口，FSDP 可保留 sharded model/opti
 当前 v1 只支持同 strategy、同 precision、同 world size、同模型配置和同关键训练
 参数恢复；不匹配时会立即拒绝，并打印具体字段差异。跨 world size resharding、
 异构后端迁移和 profiler trace 暂不放入这个最小 Runtime。
+
+`--keep-last N` 用于控制 checkpoint retention。`N=3` 是默认值，`N=0` 表示保留
+所有历史 checkpoint。清理逻辑只删除带 `READY` 的旧 checkpoint，不会把临时目录
+误认为可恢复点。
 
 ## CPU CI
 

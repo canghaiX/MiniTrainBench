@@ -7,6 +7,7 @@ from .runtime import (
     TrainingConfig,
     _write_json,
 )
+from .strategy import DDPStrategy, FSDPStrategy, TrainingStrategy, create_strategy
 
 
 def train(args):
@@ -18,6 +19,10 @@ __all__ = [
     "TrainState",
     "Trainer",
     "TrainingConfig",
+    "TrainingStrategy",
+    "DDPStrategy",
+    "FSDPStrategy",
+    "create_strategy",
     "_write_json",
     "train",
 ]

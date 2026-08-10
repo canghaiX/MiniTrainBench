@@ -29,6 +29,12 @@ class CheckpointManager:
     def _metadata_path(path: Path) -> Path:
         return path / "metadata.json"
 
+    def _resolve_path(self, path: str | Path) -> Path:
+        checkpoint_path = Path(path)
+        if not checkpoint_path.is_absolute() and self.root is not None:
+            checkpoint_path = self.root / checkpoint_path
+        return checkpoint_path
+
     @staticmethod
     def _metadata_markdown(metadata: dict[str, Any]) -> str:
         return "\n".join(
@@ -76,6 +82,7 @@ class CheckpointManager:
         optimizer: torch.optim.Optimizer,
         train_state: Any,
         config: Any,
+        keep_last: int = 3,
     ) -> str:
         if not self.enabled:
             raise RuntimeError("checkpoint 未启用")
@@ -129,6 +136,7 @@ class CheckpointManager:
             latest_tmp = self.root / ".latest.tmp"
             latest_tmp.write_text(final_path.name + "\n")
             os.replace(latest_tmp, self.root / "latest")
+            self.prune(keep_last)
         self.context.barrier()
         return str(final_path)
 
@@ -140,9 +148,7 @@ class CheckpointManager:
         config: Any,
         current_state: Any,
     ) -> tuple[Any, dict[str, Any]]:
-        checkpoint_path = Path(path)
-        if not checkpoint_path.is_dir() and self.root is not None:
-            checkpoint_path = self.root / path
+        checkpoint_path = self._resolve_path(path)
         if not (checkpoint_path / "READY").is_file():
             raise ValueError(f"checkpoint 缺少 READY 标记：{checkpoint_path}")
         metadata = json.loads(self._metadata_path(checkpoint_path).read_text())
@@ -188,12 +194,42 @@ class CheckpointManager:
         assert self.root is not None
         latest = self.root / "latest"
         if latest.is_file():
-            candidate = self.root / latest.read_text().strip()
+            raw = latest.read_text().strip()
+            candidate = Path(raw)
+            if not candidate.is_absolute():
+                candidate = self.root / raw
             if (candidate / "READY").is_file():
                 return candidate
-        candidates = sorted(
+        candidates = self.list_ready()
+        return candidates[-1] if candidates else None
+
+    def list_ready(self) -> list[Path]:
+        if not self.enabled:
+            return []
+        assert self.root is not None
+        return sorted(
             path
             for path in self.root.glob("step_*")
             if path.is_dir() and (path / "READY").is_file()
         )
-        return candidates[-1] if candidates else None
+
+    def inspect(self, path: str | Path) -> dict[str, Any]:
+        checkpoint_path = self._resolve_path(path)
+        metadata_path = self._metadata_path(checkpoint_path)
+        metadata: dict[str, Any] = {}
+        if metadata_path.is_file():
+            metadata = json.loads(metadata_path.read_text())
+        return {
+            **metadata,
+            "path": str(checkpoint_path),
+            "name": checkpoint_path.name,
+            "ready": (checkpoint_path / "READY").is_file(),
+        }
+
+    def prune(self, keep_last: int) -> None:
+        if keep_last <= 0:
+            return
+        ready = self.list_ready()
+        stale = ready[:-keep_last]
+        for path in stale:
+            shutil.rmtree(path, ignore_errors=True)

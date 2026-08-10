@@ -15,14 +15,14 @@
 
 ### Runtime 状态
 
-| 策略 | GPU 数 | 是否恢复 | Global step | Tokens seen | Checkpoint |
-| --- | ---: | --- | ---: | ---: | --- |
-| ddp | 1 | 否 | - | - | - |
-| ddp | 2 | 否 | - | - | - |
-| ddp | 4 | 否 | - | - | - |
-| fsdp | 1 | 否 | - | - | - |
-| fsdp | 2 | 否 | - | - | - |
-| fsdp | 4 | 否 | - | - | - |
+| 策略 | GPU 数 | Strategy impl | 是否恢复 | Global step | Tokens seen | Latest | Keep last | Ready 数 | Resume path | Last checkpoint |
+| --- | ---: | --- | --- | ---: | ---: | --- | ---: | ---: | --- | --- |
+| ddp | 1 | - | 否 | - | - | - | - | - | - | - |
+| ddp | 2 | - | 否 | - | - | - | - | - | - | - |
+| ddp | 4 | - | 否 | - | - | - | - | - | - | - |
+| fsdp | 1 | - | 否 | - | - | - | - | - | - | - |
+| fsdp | 2 | - | 否 | - | - | - | - | - | - | - |
+| fsdp | 4 | - | 否 | - | - | - | - | - | - | - |
 
 ### 通信
 

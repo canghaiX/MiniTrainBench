@@ -8,3 +8,4 @@ results/*_smoke.json
 results/repeat_*_smoke.json
 results/single_*.json
 results/*features_smoke.json
+.runtime*_smoke*/

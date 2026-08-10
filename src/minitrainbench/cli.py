@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--seed", type=int, default=1337)
     train_parser.add_argument("--checkpoint-dir", default=None)
     train_parser.add_argument("--save-every", type=int, default=0)
+    train_parser.add_argument("--keep-last", type=int, default=3)
     train_parser.add_argument("--resume", default=None)
     train_parser.add_argument("--output", default=None)
 
@@ -61,10 +62,11 @@ def main(argv: list[str] | None = None) -> None:
             or args.repeat < 1
             or args.warmup_steps < 0
             or args.save_every < 0
+            or args.keep_last < 0
         ):
             raise SystemExit(
                 "steps、repeat 和 grad-accum-steps 必须为正数；"
-                "warmup 和 save-every 不能为负数"
+                "warmup、save-every 和 keep-last 不能为负数"
             )
         if args.resume and not args.checkpoint_dir:
             raise SystemExit("--resume 必须与 --checkpoint-dir 一起使用")

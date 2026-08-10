@@ -5,20 +5,18 @@ import platform
 import statistics
 import time
 from dataclasses import asdict, dataclass
-from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 import torch
 import torch.distributed as dist
-from torch import nn
-from torch.nn.parallel import DistributedDataParallel
 
 from .checkpoint import CheckpointManager
 from .data import SyntheticTokenIterator
 from .distributed import DistributedContext, setup_distributed
-from .model import GPTConfig, MiniGPT, TransformerBlock, count_parameters
+from .model import GPTConfig, MiniGPT, count_parameters
+from .strategy import TrainingStrategy, create_strategy
 
 
 def _write_json(path: str | None, payload: Any) -> None:
@@ -103,6 +101,7 @@ class TrainingConfig:
     warmup_steps: int
     repeat: int
     seed: int
+    keep_last: int
 
     @classmethod
     def from_args(
@@ -131,6 +130,7 @@ class TrainingConfig:
             warmup_steps=args.warmup_steps,
             repeat=args.repeat,
             seed=args.seed,
+            keep_last=args.keep_last,
         )
 
     def model_dict(self) -> dict[str, Any]:
@@ -204,33 +204,6 @@ class StepMetrics:
         return asdict(self)
 
 
-def _wrap_fsdp(
-    model: nn.Module,
-    context: DistributedContext,
-    precision: str,
-) -> nn.Module:
-    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-    from torch.distributed.fsdp import MixedPrecision
-    from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-
-    policy = partial(transformer_auto_wrap_policy, transformer_layer_cls={TransformerBlock})
-    mixed_precision = None
-    if precision == "bf16":
-        mixed_precision = MixedPrecision(
-            param_dtype=torch.bfloat16,
-            reduce_dtype=torch.bfloat16,
-            buffer_dtype=torch.bfloat16,
-        )
-    kwargs: dict[str, Any] = {
-        "auto_wrap_policy": policy,
-        "mixed_precision": mixed_precision,
-        "use_orig_params": True,
-    }
-    if context.device.type == "cuda":
-        kwargs["device_id"] = context.device
-    return FSDP(model, **kwargs)
-
-
 class Trainer:
     """最小训练 Runtime：初始化、训练、指标和 checkpoint 生命周期。"""
 
@@ -240,10 +213,11 @@ class Trainer:
         context: DistributedContext | None = None,
     ) -> None:
         self.args = args
+        self.strategy: TrainingStrategy = create_strategy(args.strategy)
         self.context = context or setup_distributed(
             args.backend,
             args.device,
-            requires_process_group=args.strategy == "fsdp"
+            requires_process_group=self.strategy.requires_process_group()
             or bool(args.checkpoint_dir)
             or bool(args.resume),
         )
@@ -271,18 +245,11 @@ class Trainer:
             activation_checkpointing=self.config.activation_checkpointing,
         ).to(self.context.device)
         self.parameter_count = count_parameters(model)
-        if self.config.strategy == "ddp":
-            if self.context.world_size > 1:
-                model = DistributedDataParallel(
-                    model,
-                    device_ids=[self.context.local_rank]
-                    if self.context.device.type == "cuda"
-                    else None,
-                )
-        elif self.config.strategy == "fsdp":
-            model = _wrap_fsdp(model, self.context, self.config.precision)
-        else:
-            raise ValueError(f"不支持的训练策略: {self.config.strategy}")
+        model = self.strategy.wrap_model(
+            model,
+            self.context,
+            self.config.precision,
+        )
         self.model = model
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -398,6 +365,7 @@ class Trainer:
                         self.optimizer,
                         self.state,
                         self.config,
+                        keep_last=self.config.keep_last,
                     )
             if step_index >= warmup_steps:
                 measured.append(metrics)
@@ -476,10 +444,14 @@ class Trainer:
             "config": self.config.to_dict(),
             "config_fingerprint": self.config.fingerprint(),
             "runtime": {
+                "strategy_impl": self.strategy.name(),
                 "checkpoint_dir": self.args.checkpoint_dir,
                 "resume": self.resumed,
                 "resume_path": self.resume_path,
                 "last_checkpoint": self.last_checkpoint,
+                "latest_checkpoint": self._latest_checkpoint_name(),
+                "keep_last": self.config.keep_last,
+                "ready_checkpoints": self._ready_checkpoint_count(),
                 "global_step": self.state.global_step,
                 "micro_step": self.state.micro_step,
                 "tokens_seen": self.state.tokens_seen,
@@ -499,6 +471,15 @@ class Trainer:
             result["repeats"] = repeats
             result["summary"] = summary
         return result
+
+    def _ready_checkpoint_count(self) -> int:
+        if not self.checkpoint_manager.enabled:
+            return 0
+        return len(self.checkpoint_manager.list_ready())
+
+    def _latest_checkpoint_name(self) -> str | None:
+        latest = self.checkpoint_manager.find_latest()
+        return latest.name if latest is not None else None
 
     def run(self) -> dict[str, Any] | None:
         try:

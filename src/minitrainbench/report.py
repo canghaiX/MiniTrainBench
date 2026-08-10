@@ -115,8 +115,9 @@ def render_report(paths: list[str]) -> str:
             "",
             "### Runtime 状态",
             "",
-            "| 策略 | GPU 数 | 是否恢复 | Global step | Tokens seen | Checkpoint |",
-            "| --- | ---: | --- | ---: | ---: | --- |",
+            "| 策略 | GPU 数 | Strategy impl | 是否恢复 | Global step | Tokens seen | "
+            "Latest | Keep last | Ready 数 | Resume path | Last checkpoint |",
+            "| --- | ---: | --- | --- | ---: | ---: | --- | ---: | ---: | --- | --- |",
         ]
     )
     for item in sorted(training, key=lambda row: (row["strategy"], row["world_size"])):
@@ -124,14 +125,20 @@ def render_report(paths: list[str]) -> str:
         resumed = runtime.get("resume", item.get("resumed", False))
         global_step = runtime.get("global_step", item.get("global_step", "-"))
         tokens_seen = runtime.get("tokens_seen", item.get("tokens_seen", "-"))
-        checkpoint = runtime.get(
+        last_checkpoint = runtime.get(
             "last_checkpoint",
             item.get("checkpoint_dir", "-"),
         ) or "-"
+        latest_checkpoint = runtime.get("latest_checkpoint", "-") or "-"
+        keep_last = runtime.get("keep_last", "-")
+        ready_checkpoints = runtime.get("ready_checkpoints", "-")
+        strategy_impl = runtime.get("strategy_impl", "-")
+        resume_path = runtime.get("resume_path", "-") or "-"
         lines.append(
-            f"| {item['strategy']} | {item['world_size']} | "
+            f"| {item['strategy']} | {item['world_size']} | {strategy_impl} | "
             f"{'是' if resumed else '否'} | {global_step} | {tokens_seen} | "
-            f"{checkpoint} |"
+            f"{latest_checkpoint} | {keep_last} | {ready_checkpoints} | "
+            f"{resume_path} | {last_checkpoint} |"
         )
     lines.extend(
         [

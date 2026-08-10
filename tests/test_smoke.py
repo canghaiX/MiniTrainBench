@@ -9,9 +9,12 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from minitrainbench.checkpoint import CheckpointManager
 from minitrainbench.data import SyntheticTokenIterator
+from minitrainbench.distributed import DistributedContext
 from minitrainbench.model import GPTConfig, MiniGPT
 from minitrainbench.report import render_report
+from minitrainbench.strategy import create_strategy, registered_strategies
 
 
 def _run_module(*arguments: str, timeout: int = 180) -> subprocess.CompletedProcess[str]:
@@ -80,6 +83,16 @@ def test_cpu_training_smoke(tmp_path) -> None:
     assert "step_time_ms" in completed.stdout
 
 
+def test_strategy_registry_creates_supported_strategies() -> None:
+    assert registered_strategies() == ("ddp", "fsdp")
+    assert create_strategy("ddp").name() == "DDPStrategy"
+    assert create_strategy("ddp").requires_process_group() is False
+    assert create_strategy("fsdp").name() == "FSDPStrategy"
+    assert create_strategy("fsdp").requires_process_group() is True
+    with pytest.raises(ValueError, match="不支持的训练策略"):
+        create_strategy("unknown")
+
+
 def test_synthetic_iterator_is_step_deterministic() -> None:
     iterator = SyntheticTokenIterator(
         vocab_size=64,
@@ -132,6 +145,8 @@ def test_cpu_checkpoint_resume_and_config_guard(tmp_path) -> None:
         "0",
         "--checkpoint-dir",
         str(checkpoint_dir),
+        "--keep-last",
+        "1",
     ]
 
     _run_module(
@@ -147,7 +162,12 @@ def test_cpu_checkpoint_resume_and_config_guard(tmp_path) -> None:
     first_result = json.loads(first_output.read_text())
     assert first_result["global_step"] == 2
     assert first_result["tokens_seen"] == 16
+    assert first_result["runtime"]["strategy_impl"] == "DDPStrategy"
+    assert first_result["runtime"]["keep_last"] == 1
+    assert first_result["runtime"]["ready_checkpoints"] == 1
+    assert first_result["runtime"]["latest_checkpoint"] == "step_00000002"
     assert (checkpoint_dir / "step_00000002" / "READY").is_file()
+    assert not (checkpoint_dir / "step_00000001").exists()
     assert "配置指纹" in (checkpoint_dir / "step_00000002" / "metadata_zh.md").read_text()
     assert (checkpoint_dir / "latest").read_text().strip() == "step_00000002"
 
@@ -169,7 +189,27 @@ def test_cpu_checkpoint_resume_and_config_guard(tmp_path) -> None:
     assert resumed_result["global_step"] == 3
     assert resumed_result["tokens_seen"] == 24
     assert resumed_result["runtime"]["last_checkpoint"].endswith("step_00000003")
+    assert resumed_result["runtime"]["ready_checkpoints"] == 1
     assert (checkpoint_dir / "latest").read_text().strip() == "step_00000003"
+    assert not (checkpoint_dir / "step_00000002").exists()
+
+    bad_checkpoint = checkpoint_dir / "step_99999999"
+    bad_checkpoint.mkdir()
+    (checkpoint_dir / "latest").write_text("step_99999999\n")
+    manager = CheckpointManager(
+        str(checkpoint_dir),
+        DistributedContext(
+            rank=0,
+            local_rank=0,
+            world_size=1,
+            device=torch.device("cpu"),
+            initialized_here=False,
+        ),
+    )
+    assert manager.find_latest() == checkpoint_dir / "step_00000003"
+    inspected = manager.inspect("step_00000003")
+    assert inspected["ready"] is True
+    assert inspected["step"] == 3
 
     bad_environment = os.environ.copy()
     bad_environment["OMP_NUM_THREADS"] = "1"
@@ -184,7 +224,7 @@ def test_cpu_checkpoint_resume_and_config_guard(tmp_path) -> None:
             "--steps",
             "1",
             "--resume",
-            str(checkpoint_dir / "step_00000002"),
+            str(checkpoint_dir / "step_00000003"),
         ],
         check=False,
         text=True,
@@ -282,6 +322,17 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
                 "step_time_ms": {"mean": 16.0, "std": 0.2, "min": 15.8, "max": 16.2},
                 "max_cuda_memory_mb": {"mean": 550.0, "std": 0.0, "min": 550.0, "max": 550.0},
             },
+            "runtime": {
+                "strategy_impl": "FSDPStrategy",
+                "resume": True,
+                "resume_path": "results/runtime_resume/fsdp_2proc_ckpt/step_00000002",
+                "latest_checkpoint": "step_00000003",
+                "last_checkpoint": "results/runtime_resume/fsdp_2proc_ckpt/step_00000003",
+                "keep_last": 1,
+                "ready_checkpoints": 1,
+                "global_step": 3,
+                "tokens_seen": 1536,
+            },
         },
         "comm.json": {
             "benchmark": "communication",
@@ -307,6 +358,9 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
 
     assert "扩展效率" in report
     assert "Runtime 状态" in report
+    assert "Strategy impl" in report
+    assert "FSDPStrategy" in report
+    assert "step_00000003" in report
     assert "前反向" in report
     assert "75.00%" in report
     assert "50.00%" in report
