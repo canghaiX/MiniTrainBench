@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager, nullcontext
 from functools import partial
 from typing import Any
 
@@ -24,6 +25,10 @@ class TrainingStrategy(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def default_gradient_sync_mode(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
     def wrap_model(
         self,
         model: nn.Module,
@@ -32,6 +37,22 @@ class TrainingStrategy(ABC):
     ) -> nn.Module:
         raise NotImplementedError
 
+    def resolve_gradient_sync_mode(self, requested_mode: str) -> str:
+        if requested_mode == "auto":
+            return self.default_gradient_sync_mode()
+        if requested_mode in {"every", "last"}:
+            return requested_mode
+        raise ValueError(f"不支持的 gradient sync 模式: {requested_mode}")
+
+    def gradient_sync_context(
+        self,
+        model: nn.Module,
+        sync_gradients: bool,
+    ) -> AbstractContextManager[None]:
+        if sync_gradients or not hasattr(model, "no_sync"):
+            return nullcontext()
+        return model.no_sync()  # type: ignore[no-any-return]
+
 
 class DDPStrategy(TrainingStrategy):
     def name(self) -> str:
@@ -39,6 +60,9 @@ class DDPStrategy(TrainingStrategy):
 
     def requires_process_group(self) -> bool:
         return False
+
+    def default_gradient_sync_mode(self) -> str:
+        return "last"
 
     def wrap_model(
         self,
@@ -61,6 +85,9 @@ class FSDPStrategy(TrainingStrategy):
 
     def requires_process_group(self) -> bool:
         return True
+
+    def default_gradient_sync_mode(self) -> str:
+        return "every"
 
     def wrap_model(
         self,

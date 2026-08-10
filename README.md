@@ -11,6 +11,8 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 - 实现最小训练 Runtime：`TrainingConfig`、`TrainState`、`StepMetrics`、`Trainer`、
   deterministic synthetic data、distributed checkpoint/resume。
 - 使用可插拔 strategy 抽象隔离 DDP/FSDP 包装逻辑，并支持 checkpoint retention。
+- 提供 DDP/FSDP gradient accumulation 同步策略，并展示通信与显存取舍。
+- 保存每个 rank 的 RNG 状态，支持带 dropout 的精确 checkpoint/resume 校验。
 - 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
 - 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
@@ -18,7 +20,7 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 
 > 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP 在
 > 1/2/4/8 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
-> smoke test、可插拔训练策略、分布式 checkpoint/resume 和可复现 Markdown 报告。
+> smoke test、可插拔训练策略、精确分布式 checkpoint/resume 和可复现 Markdown 报告。
 
 ## 训练框架能力点
 
@@ -32,6 +34,11 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
   Runtime 会扫描 `step_*` 并跳过没有 `READY` 的目录。
 - `scripts/run_runtime_resume_smoke.sh` 提供 preemption/resume 复现实验：先保存，
   再从 latest checkpoint 继续训练。
+- `--gradient-sync-mode auto` 会让 DDP 只在 gradient accumulation 的最后一个
+  micro-batch 同步梯度；FSDP 默认每个 micro-batch 同步以控制未分片梯度的显存峰值，
+  也可显式切换到 `last`。
+- checkpoint v2 在 `READY` 前保存每个 rank 的 CPU/CUDA RNG 状态；`checkpoint verify`
+  可比较两份 DDP/FSDP checkpoint 的模型、optimizer、TrainState 和 RNG digest。
 
 ## 环境
 
@@ -120,7 +127,7 @@ docker run --rm --gpus all --ipc=host --network=host \
   -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
   torchrun --standalone --nproc_per_node=2 -m minitrainbench train \
   --strategy fsdp --precision bf16 --activation-checkpointing \
-  --grad-accum-steps 2 --batch-size 1 --seq-length 256 \
+  --grad-accum-steps 2 --gradient-sync-mode auto --batch-size 1 --seq-length 256 \
   --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 \
   --steps 5 --warmup-steps 2 --repeat 3 \
   --output results/fsdp_checkpoint_accum_2gpu.json
@@ -161,6 +168,36 @@ IMAGE=minitrainbench:gpu scripts/run_runtime_resume_smoke.sh
 
 ```bash
 STRATEGY=ddp KEEP_LAST=1 scripts/run_runtime_resume_smoke.sh
+```
+
+运行 2 卡 gradient accumulation 同步策略对比：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_gradient_sync_matrix.sh
+```
+
+脚本使用 `grad_accum_steps=4`，比较 DDP `auto/every` 与 FSDP `auto/last`，
+输出 JSON 和 `results/gradient_sync/report.md`。可通过 `NPROC`、`STEPS`、
+`WARMUP_STEPS`、`REPEAT`、`GRAD_ACCUM_STEPS` 和模型规模相关环境变量覆盖默认值。
+
+验证带 dropout 的精确 FSDP resume：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_runtime_determinism_smoke.sh
+```
+
+该脚本比较连续 3 step 与“2 step 保存 + resume 1 step”，并写入
+`results/runtime_determinism/verification.json`。也可以手动比较两份同 world size
+checkpoint：
+
+```bash
+docker run --rm --gpus all --ipc=host --network=host \
+  -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
+  torchrun --standalone --nproc_per_node=2 -m minitrainbench checkpoint verify \
+  --device cuda \
+  --left /workspace/results/runtime_determinism/continuous_fsdp_2proc/step_00000003 \
+  --right /workspace/results/runtime_determinism/interrupted_fsdp_2proc/step_00000003 \
+  --output /workspace/results/runtime_determinism/verification.json
 ```
 
 从保存的 JSON 结果生成 Markdown 报告：
@@ -208,6 +245,19 @@ sequence length 256、2 个 warmup step 和 5 个测量 step。
 | all_gather | 16777216 | 3.349 | 160.314 |
 | reduce_scatter | 16777216 | 2.223 | 241.493 |
 
+2 卡 gradient accumulation 同步策略实测：
+
+| 策略 | 请求模式 | 实际模式 | 同步 micro-batch/step | Tokens/sec | Step time (ms) | 最大显存 (MB) |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| ddp | auto | last | 1 | 34339.65 | 59.64 | 656.15 |
+| ddp | every | every | 4 | 30118.36 | 68.00 | 655.06 |
+| fsdp | auto | every | 4 | 15661.75 | 130.76 | 267.21 |
+| fsdp | last | last | 1 | 16540.01 | 123.82 | 267.21 |
+
+精确恢复校验使用 2 卡 FSDP、BF16、dropout 0.1、小型 17.4K 参数模型。连续 3 step
+和“2 step 保存 + resume 1 step”的 `checkpoint verify` 结果为 `exact_match=true`：
+模型、optimizer、TrainState 和每 rank RNG state digest 均一致。
+
 ## 瓶颈分析
 
 DDP 会在每个 rank 上保留完整的模型参数、梯度和优化器状态。它的主要分布式
@@ -231,8 +281,13 @@ GB/s。FSDP 的 all-gather/reduce-scatter 在大 tensor 下有较高带宽，但
 可以结合通信 JSON 分析 collective 延迟、带宽和训练 step time 的关系。比较结果时
 应保持模型、精度、local batch、sequence length、warmup 和测量 step 数一致。
 activation checkpointing 通过额外重计算换取更低 activation 显存；gradient
-accumulation 则通过在同步点之间累积更多计算，减少优化器更新频率。当前表格只跑了
-`repeat=1`，适合展示 full-node 覆盖；用于严谨性能结论时应使用 `REPEAT=3` 或更高。
+accumulation 则通过在同步点之间累积更多计算，减少优化器更新频率。实现上，DDP 若在
+每个 micro-batch 同步，会重复触发梯度 all-reduce；本轮 2 卡实验中，`auto` 解析为
+末步同步后将 step time 从 68.00 ms 降到 59.64 ms。FSDP 默认保持每 micro-batch
+同步，避免未分片梯度在 accumulation window 内累积；显式 `last` 在本轮短跑将 step
+time 从 130.76 ms 降到 123.82 ms，但这个 23.2M 模型没有观察到额外峰值显存，不能将
+该现象外推到更大模型。当前表格只跑了 `repeat=1`，适合展示 full-node 覆盖；用于严谨
+性能结论时应使用 `REPEAT=3` 或更高。
 
 ## 训练 Runtime 设计
 
@@ -255,11 +310,20 @@ DDP 与 FSDP 走同一套保存/加载入口，FSDP 可保留 sharded model/opti
 保存目录采用 `step_00000010/` 形式；只有包含 `READY` 标记的目录会被视为可恢复。
 写入过程先进入临时目录，所有 rank 完成 DCP 保存后再由 rank 0 写入 `metadata.json`、
 中文 `metadata_zh.md`、READY 标记和 `latest` 指针，降低半成品 checkpoint 被误用的
-风险。
+风险。v2 checkpoint 还会在发布前写入每个 rank 的 CPU/CUDA RNG 状态，使带 dropout
+或 activation checkpointing 的随机训练路径可以精确恢复。
 
-当前 v1 只支持同 strategy、同 precision、同 world size、同模型配置和同关键训练
+当前 v2 只支持同 strategy、同 precision、同 world size、同模型配置和同关键训练
 参数恢复；不匹配时会立即拒绝，并打印具体字段差异。跨 world size resharding、
 异构后端迁移和 profiler trace 暂不放入这个最小 Runtime。
+
+旧版 v1 checkpoint 不含 RNG state 和 gradient sync mode。使用默认 `auto` 恢复旧
+checkpoint 时，Runtime 会保留旧版的每 micro-batch 同步语义，并标记
+`resume_deterministic=false`；显式切换新的同步模式则会被配置校验拒绝。
+
+`minitrainbench checkpoint verify` 会以保存时的 strategy 和模型配置重新构建训练
+状态，在相同 world size 下加载两份 checkpoint，再对模型、optimizer、TrainState 和
+每 rank RNG state 做分布式 digest 比较。任一项不一致会写出诊断 JSON 并以非零状态退出。
 
 `--keep-last N` 用于控制 checkpoint retention。`N=3` 是默认值，`N=0` 表示保留
 所有历史 checkpoint。清理逻辑只删除带 `READY` 的旧 checkpoint，不会把临时目录
@@ -269,5 +333,5 @@ DDP 与 FSDP 走同一套保存/加载入口，FSDP 可保留 sharded model/opti
 
 GitHub Actions 会安装 CPU 版 PyTorch wheel，并运行 tiny GPT forward/backward
 测试、单进程训练 smoke test、checkpoint/resume、确定性 synthetic data、两进程
-Gloo collective test、Markdown 报告渲染和 `ruff check .`。NCCL 和 GPU 相关
-FSDP 性能实验保留为本地 Docker benchmark。
+Gloo collective test、dropout 下的 exact checkpoint verify、Markdown 报告渲染和
+`ruff check .`。NCCL 和 GPU 相关 FSDP 性能实验保留为本地 Docker benchmark。

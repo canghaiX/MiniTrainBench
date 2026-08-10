@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 
 import pytest
 
@@ -14,7 +16,9 @@ from minitrainbench.data import SyntheticTokenIterator
 from minitrainbench.distributed import DistributedContext
 from minitrainbench.model import GPTConfig, MiniGPT
 from minitrainbench.report import render_report
+from minitrainbench.runtime import TrainingConfig
 from minitrainbench.strategy import create_strategy, registered_strategies
+from minitrainbench.verification import _validate_pair
 
 
 def _run_module(*arguments: str, timeout: int = 180) -> subprocess.CompletedProcess[str]:
@@ -91,6 +95,130 @@ def test_strategy_registry_creates_supported_strategies() -> None:
     assert create_strategy("fsdp").requires_process_group() is True
     with pytest.raises(ValueError, match="不支持的训练策略"):
         create_strategy("unknown")
+
+
+def test_gradient_sync_policy_and_no_sync_context() -> None:
+    class FakeModel:
+        def __init__(self) -> None:
+            self.entries = 0
+
+        @contextmanager
+        def no_sync(self):
+            self.entries += 1
+            yield
+
+    model = FakeModel()
+    ddp = create_strategy("ddp")
+    fsdp = create_strategy("fsdp")
+
+    assert ddp.resolve_gradient_sync_mode("auto") == "last"
+    assert fsdp.resolve_gradient_sync_mode("auto") == "every"
+    assert ddp.resolve_gradient_sync_mode("every") == "every"
+    assert fsdp.resolve_gradient_sync_mode("last") == "last"
+
+    with ddp.gradient_sync_context(model, sync_gradients=False):
+        pass
+    with ddp.gradient_sync_context(model, sync_gradients=True):
+        pass
+    assert model.entries == 1
+
+
+def test_cpu_gradient_sync_result(tmp_path) -> None:
+    output = tmp_path / "gradient-sync.json"
+    _run_module(
+        "train",
+        "--device",
+        "cpu",
+        "--strategy",
+        "ddp",
+        "--precision",
+        "fp32",
+        "--gradient-sync-mode",
+        "auto",
+        "--grad-accum-steps",
+        "2",
+        "--batch-size",
+        "1",
+        "--seq-length",
+        "8",
+        "--vocab-size",
+        "64",
+        "--d-model",
+        "16",
+        "--n-heads",
+        "4",
+        "--n-layers",
+        "1",
+        "--steps",
+        "1",
+        "--warmup-steps",
+        "0",
+        "--output",
+        str(output),
+    )
+    result = json.loads(output.read_text())
+    assert result["gradient_sync_mode"] == "auto"
+    assert result["resolved_gradient_sync_mode"] == "last"
+    assert result["synchronized_microbatches_per_step"] == 1
+    assert result["runtime"]["resume_deterministic"] is None
+
+
+def test_gloo_ddp_gradient_accumulation_auto_smoke(tmp_path) -> None:
+    output = tmp_path / "gradient-sync-ddp.json"
+    environment = os.environ.copy()
+    environment["OMP_NUM_THREADS"] = "1"
+    environment["MKL_NUM_THREADS"] = "1"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nproc_per_node=2",
+            "--module",
+            "minitrainbench",
+            "train",
+            "--device",
+            "cpu",
+            "--backend",
+            "gloo",
+            "--strategy",
+            "ddp",
+            "--precision",
+            "fp32",
+            "--gradient-sync-mode",
+            "auto",
+            "--grad-accum-steps",
+            "2",
+            "--batch-size",
+            "1",
+            "--seq-length",
+            "8",
+            "--vocab-size",
+            "64",
+            "--d-model",
+            "16",
+            "--n-heads",
+            "4",
+            "--n-layers",
+            "1",
+            "--steps",
+            "1",
+            "--warmup-steps",
+            "0",
+            "--output",
+            str(output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=180,
+    )
+    result = json.loads(output.read_text())
+    assert result["world_size"] == 2
+    assert result["resolved_gradient_sync_mode"] == "last"
+    assert result["synchronized_microbatches_per_step"] == 1
 
 
 def test_synthetic_iterator_is_step_deterministic() -> None:
@@ -236,6 +364,171 @@ def test_cpu_checkpoint_resume_and_config_guard(tmp_path) -> None:
     assert "与当前训练配置不匹配" in bad.stderr
 
 
+def test_checkpoint_verify_exact_resume_and_legacy_diagnostic(tmp_path) -> None:
+    continuous_dir = tmp_path / "continuous"
+    interrupted_dir = tmp_path / "interrupted"
+    common_arguments = [
+        "train",
+        "--device",
+        "cpu",
+        "--strategy",
+        "ddp",
+        "--precision",
+        "fp32",
+        "--batch-size",
+        "1",
+        "--seq-length",
+        "8",
+        "--vocab-size",
+        "64",
+        "--d-model",
+        "16",
+        "--n-heads",
+        "4",
+        "--n-layers",
+        "1",
+        "--dropout",
+        "0.2",
+        "--warmup-steps",
+        "0",
+        "--keep-last",
+        "0",
+    ]
+    _run_module(
+        *common_arguments,
+        "--steps",
+        "3",
+        "--checkpoint-dir",
+        str(continuous_dir),
+        "--save-every",
+        "3",
+        timeout=240,
+    )
+    _run_module(
+        *common_arguments,
+        "--steps",
+        "2",
+        "--checkpoint-dir",
+        str(interrupted_dir),
+        "--save-every",
+        "2",
+        timeout=240,
+    )
+    _run_module(
+        *common_arguments,
+        "--steps",
+        "1",
+        "--checkpoint-dir",
+        str(interrupted_dir),
+        "--resume",
+        "latest",
+        "--save-every",
+        "1",
+        timeout=240,
+    )
+    verification_output = tmp_path / "verification.json"
+    _run_module(
+        "checkpoint",
+        "verify",
+        "--device",
+        "cpu",
+        "--backend",
+        "gloo",
+        "--left",
+        str(continuous_dir / "step_00000003"),
+        "--right",
+        str(interrupted_dir / "step_00000003"),
+        "--output",
+        str(verification_output),
+        timeout=240,
+    )
+    verification = json.loads(verification_output.read_text())
+    assert verification["exact_match"] is True
+    assert verification["matches"] == {
+        "model": True,
+        "optimizer": True,
+        "train_state": True,
+        "rng": True,
+    }
+
+    context = DistributedContext(
+        rank=0,
+        local_rank=0,
+        world_size=1,
+        device=torch.device("cpu"),
+        initialized_here=False,
+    )
+    manager = CheckpointManager(root=None, context=context)
+    with pytest.raises(ValueError, match="READY"):
+        _validate_pair(
+            manager,
+            str(continuous_dir / "step_00000003"),
+            str(tmp_path / "not-ready"),
+            context,
+        )
+    wrong_world_size = DistributedContext(
+        rank=0,
+        local_rank=0,
+        world_size=2,
+        device=torch.device("cpu"),
+        initialized_here=False,
+    )
+    with pytest.raises(ValueError, match="world size"):
+        _validate_pair(
+            CheckpointManager(root=None, context=wrong_world_size),
+            str(continuous_dir / "step_00000003"),
+            str(interrupted_dir / "step_00000003"),
+            wrong_world_size,
+        )
+    mismatched = tmp_path / "mismatched"
+    shutil.copytree(continuous_dir / "step_00000003", mismatched)
+    metadata_path = mismatched / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["strategy"] = "fsdp"
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="元数据不兼容"):
+        _validate_pair(
+            manager,
+            str(continuous_dir / "step_00000003"),
+            str(mismatched),
+            context,
+        )
+
+    legacy_rng = interrupted_dir / "step_00000003" / "rng_state_rank_00000.pt"
+    legacy_rng.unlink()
+    legacy_metadata_path = interrupted_dir / "step_00000003" / "metadata.json"
+    legacy_metadata = json.loads(legacy_metadata_path.read_text())
+    legacy_metadata["format_version"] = 1
+    legacy_metadata.pop("rng_state_version", None)
+    legacy_config = dict(legacy_metadata["config"])
+    legacy_config["gradient_sync_mode"] = "auto"
+    legacy_metadata["config_fingerprint"] = TrainingConfig.from_dict(
+        legacy_config
+    ).legacy_fingerprint()
+    legacy_metadata["config"].pop("gradient_sync_mode")
+    legacy_metadata_path.write_text(json.dumps(legacy_metadata))
+    legacy_output = tmp_path / "legacy.json"
+    _run_module(
+        *common_arguments,
+        "--steps",
+        "1",
+        "--checkpoint-dir",
+        str(interrupted_dir),
+        "--resume",
+        "step_00000003",
+        "--output",
+        str(legacy_output),
+        timeout=240,
+    )
+    legacy_result = json.loads(legacy_output.read_text())
+    assert legacy_result["runtime"]["resume_deterministic"] is False
+    assert (
+        legacy_result["runtime"]["resume_determinism_reason"]
+        == "checkpoint_missing_rng_state"
+    )
+    assert legacy_result["resolved_gradient_sync_mode"] == "every"
+
+
 def test_gloo_collectives_smoke(tmp_path) -> None:
     output = tmp_path / "comm.json"
     environment = os.environ.copy()
@@ -324,8 +617,12 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
             },
             "runtime": {
                 "strategy_impl": "FSDPStrategy",
+                "gradient_sync_mode": "auto",
+                "resolved_gradient_sync_mode": "every",
+                "synchronized_microbatches_per_step": 2,
                 "resume": True,
                 "resume_path": "results/runtime_resume/fsdp_2proc_ckpt/step_00000002",
+                "resume_deterministic": True,
                 "latest_checkpoint": "step_00000003",
                 "last_checkpoint": "results/runtime_resume/fsdp_2proc_ckpt/step_00000003",
                 "keep_last": 1,
@@ -360,6 +657,11 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
     assert "Runtime 状态" in report
     assert "Strategy impl" in report
     assert "FSDPStrategy" in report
+    assert "请求同步" in report
+    assert "实际同步" in report
+    assert "精确恢复" in report
+    assert "auto" in report
+    assert "every" in report
     assert "step_00000003" in report
     assert "前反向" in report
     assert "75.00%" in report

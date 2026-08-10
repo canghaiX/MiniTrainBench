@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import warnings
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,15 @@ import torch.distributed.checkpoint as dcp
 from torch import nn
 
 from .distributed import DistributedContext
+
+
+@dataclass(frozen=True)
+class CheckpointLoad:
+    train_state: Any
+    metadata: dict[str, Any]
+    rng_state: dict[str, torch.Tensor] | None
+    deterministic: bool
+    determinism_reason: str
 
 
 class CheckpointManager:
@@ -28,6 +39,9 @@ class CheckpointManager:
     @staticmethod
     def _metadata_path(path: Path) -> Path:
         return path / "metadata.json"
+
+    def _rng_state_path(self, path: Path) -> Path:
+        return path / f"rng_state_rank_{self.context.rank:05d}.pt"
 
     def _resolve_path(self, path: str | Path) -> Path:
         checkpoint_path = Path(path)
@@ -47,10 +61,12 @@ class CheckpointManager:
                 f"- World size：{metadata['world_size']}",
                 f"- Tokens seen：{metadata['tokens_seen']}",
                 f"- 配置指纹：`{metadata['config_fingerprint']}`",
+                f"- RNG 状态版本：{metadata.get('rng_state_version', '无（旧 checkpoint）')}",
                 f"- 生成时间：{metadata['created_at']}",
                 "",
                 "只有同 strategy、同 precision、同 world size、同模型配置和同关键训练参数的"
-                "任务可以恢复这个 checkpoint。",
+                "任务可以恢复这个 checkpoint。带有每 rank RNG 状态的 v2 checkpoint "
+                "可以精确恢复随机训练路径。",
             ]
         ) + "\n"
 
@@ -60,6 +76,11 @@ class CheckpointManager:
         config: Any,
         path: Path,
     ) -> None:
+        is_legacy_gradient_sync = (
+            "gradient_sync_mode" not in metadata.get("config", {})
+            and config.gradient_sync_mode == "auto"
+            and metadata.get("config_fingerprint") == config.legacy_fingerprint()
+        )
         expected = {
             "strategy": config.strategy,
             "precision": config.precision,
@@ -70,6 +91,7 @@ class CheckpointManager:
             f"{key}: checkpoint={metadata.get(key)!r}, 当前={value!r}"
             for key, value in expected.items()
             if metadata.get(key) != value
+            and not (key == "config_fingerprint" and is_legacy_gradient_sync)
         ]
         if mismatches:
             raise ValueError(
@@ -82,6 +104,7 @@ class CheckpointManager:
         optimizer: torch.optim.Optimizer,
         train_state: Any,
         config: Any,
+        rng_state: dict[str, torch.Tensor],
         keep_last: int = 3,
     ) -> str:
         if not self.enabled:
@@ -109,10 +132,12 @@ class CheckpointManager:
             },
         }
         dcp.save(state, checkpoint_id=temporary_path)
+        torch.save(rng_state, self._rng_state_path(temporary_path))
         self.context.barrier()
         if self.context.is_main:
             metadata = {
-                "format_version": 1,
+                "format_version": 2,
+                "rng_state_version": 1,
                 "path": str(final_path),
                 "step": train_state.global_step,
                 "strategy": config.strategy,
@@ -147,7 +172,7 @@ class CheckpointManager:
         optimizer: torch.optim.Optimizer,
         config: Any,
         current_state: Any,
-    ) -> tuple[Any, dict[str, Any]]:
+    ) -> CheckpointLoad:
         checkpoint_path = self._resolve_path(path)
         if not (checkpoint_path / "READY").is_file():
             raise ValueError(f"checkpoint 缺少 READY 标记：{checkpoint_path}")
@@ -177,7 +202,7 @@ class CheckpointManager:
             model_state_dict=model_state,
             optim_state_dict=optimizer_state,
         )
-        loaded = type(current_state)(
+        loaded_state = type(current_state)(
             global_step=int(train_state["global_step"].item()),
             micro_step=int(train_state["micro_step"].item()),
             tokens_seen=int(train_state["tokens_seen"].item()),
@@ -185,8 +210,40 @@ class CheckpointManager:
             config_fingerprint=str(metadata["config_fingerprint"]),
             resumed_from=str(checkpoint_path),
         )
+        rng_state, deterministic, determinism_reason = self._load_rng_state(checkpoint_path)
         self.context.barrier()
-        return loaded, metadata
+        return CheckpointLoad(
+            train_state=loaded_state,
+            metadata=metadata,
+            rng_state=rng_state,
+            deterministic=deterministic,
+            determinism_reason=determinism_reason,
+        )
+
+    def _load_rng_state(
+        self,
+        checkpoint_path: Path,
+    ) -> tuple[dict[str, torch.Tensor] | None, bool, str]:
+        path = self._rng_state_path(checkpoint_path)
+        if not path.is_file():
+            message = (
+                f"checkpoint {checkpoint_path} 缺少 rank {self.context.rank} 的 RNG 状态；"
+                "本次恢复可继续训练，但无法保证精确复现。"
+            )
+            if self.context.is_main:
+                warnings.warn(message, RuntimeWarning, stacklevel=3)
+            return None, False, "checkpoint_missing_rng_state"
+        loaded = torch.load(path, map_location="cpu", weights_only=True)
+        if not isinstance(loaded, dict) or not isinstance(loaded.get("cpu"), torch.Tensor):
+            raise ValueError(f"checkpoint RNG 状态格式无效：{path}")
+        rng_state = {
+            name: value
+            for name, value in loaded.items()
+            if isinstance(name, str) and isinstance(value, torch.Tensor)
+        }
+        if self.context.device.type == "cuda" and "cuda" not in rng_state:
+            raise ValueError(f"checkpoint 缺少 CUDA RNG 状态：{path}")
+        return rng_state, True, "restored_rank_rng_state"
 
     def find_latest(self) -> Path | None:
         if not self.enabled:
@@ -224,6 +281,7 @@ class CheckpointManager:
             "path": str(checkpoint_path),
             "name": checkpoint_path.name,
             "ready": (checkpoint_path / "READY").is_file(),
+            "rng_state_available": self._rng_state_path(checkpoint_path).is_file(),
         }
 
     def prune(self, keep_last: int) -> None:

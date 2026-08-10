@@ -17,16 +17,16 @@
 
 ### Runtime 状态
 
-| 策略 | GPU 数 | Strategy impl | 是否恢复 | Global step | Tokens seen | Latest | Keep last | Ready 数 | Resume path | Last checkpoint |
-| --- | ---: | --- | --- | ---: | ---: | --- | ---: | ---: | --- | --- |
-| ddp | 1 | DDPStrategy | 否 | 7 | 3584 | - | 3 | 0 | - | - |
-| ddp | 2 | DDPStrategy | 否 | 7 | 7168 | - | 3 | 0 | - | - |
-| ddp | 4 | DDPStrategy | 否 | 7 | 14336 | - | 3 | 0 | - | - |
-| ddp | 8 | DDPStrategy | 否 | 7 | 28672 | - | 3 | 0 | - | - |
-| fsdp | 1 | FSDPStrategy | 否 | 7 | 3584 | - | 3 | 0 | - | - |
-| fsdp | 2 | FSDPStrategy | 否 | 7 | 7168 | - | 3 | 0 | - | - |
-| fsdp | 4 | FSDPStrategy | 否 | 7 | 14336 | - | 3 | 0 | - | - |
-| fsdp | 8 | FSDPStrategy | 否 | 7 | 28672 | - | 3 | 0 | - | - |
+| 策略 | GPU 数 | Strategy impl | 是否恢复 | Global step | Tokens seen | 请求同步 | 实际同步 | 同步 micro-batch/step | 精确恢复 | Latest | Keep last | Ready 数 | Resume path | Last checkpoint |
+| --- | ---: | --- | --- | ---: | ---: | --- | --- | ---: | --- | --- | ---: | ---: | --- | --- |
+| ddp | 1 | DDPStrategy | 否 | 7 | 3584 | - | - | - | - | - | 3 | 0 | - | - |
+| ddp | 2 | DDPStrategy | 否 | 7 | 7168 | - | - | - | - | - | 3 | 0 | - | - |
+| ddp | 4 | DDPStrategy | 否 | 7 | 14336 | - | - | - | - | - | 3 | 0 | - | - |
+| ddp | 8 | DDPStrategy | 否 | 7 | 28672 | - | - | - | - | - | 3 | 0 | - | - |
+| fsdp | 1 | FSDPStrategy | 否 | 7 | 3584 | - | - | - | - | - | 3 | 0 | - | - |
+| fsdp | 2 | FSDPStrategy | 否 | 7 | 7168 | - | - | - | - | - | 3 | 0 | - | - |
+| fsdp | 4 | FSDPStrategy | 否 | 7 | 14336 | - | - | - | - | - | 3 | 0 | - | - |
+| fsdp | 8 | FSDPStrategy | 否 | 7 | 28672 | - | - | - | - | - | 3 | 0 | - | - |
 
 ### 通信
 

@@ -1,0 +1,34 @@
+{
+  "benchmark": "checkpoint_verification",
+  "config_fingerprint": "7f02955a0ecbcc3a26eff19b0b6119f06996bcf49d7e2661ec20cecb22014c1a",
+  "digests": {
+    "left": {
+      "model": "bfde59caa0671b1db8f257c0f1ca511e2b9064fad2107da7ffe9359e63ea72cf",
+      "optimizer": "ffec806bdbf02f41dd274ab148327fc99281e2ae2f2ec47daeef2c51c09f7c1a",
+      "rng": "691db6ab7d3e650c97efb02898e0e47c29973253ef898a2a92b96f75c89a1bfd",
+      "train_state": "7115642c119de0513d0aec4cef7ea2b393cde72a3a3443ccb303eba140df4b7e"
+    },
+    "right": {
+      "model": "bfde59caa0671b1db8f257c0f1ca511e2b9064fad2107da7ffe9359e63ea72cf",
+      "optimizer": "ffec806bdbf02f41dd274ab148327fc99281e2ae2f2ec47daeef2c51c09f7c1a",
+      "rng": "691db6ab7d3e650c97efb02898e0e47c29973253ef898a2a92b96f75c89a1bfd",
+      "train_state": "7115642c119de0513d0aec4cef7ea2b393cde72a3a3443ccb303eba140df4b7e"
+    }
+  },
+  "exact_match": true,
+  "left": "/workspace/results/runtime_determinism/continuous_fsdp_2proc/step_00000003",
+  "left_determinism_reason": "restored_rank_rng_state",
+  "left_deterministic": true,
+  "matches": {
+    "model": true,
+    "optimizer": true,
+    "rng": true,
+    "train_state": true
+  },
+  "precision": "bf16",
+  "right": "/workspace/results/runtime_determinism/interrupted_fsdp_2proc/step_00000003",
+  "right_determinism_reason": "restored_rank_rng_state",
+  "right_deterministic": true,
+  "strategy": "fsdp",
+  "world_size": 2
+}

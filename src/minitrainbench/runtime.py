@@ -97,6 +97,7 @@ class TrainingConfig:
     n_layers: int
     dropout: float
     learning_rate: float
+    gradient_sync_mode: str
     steps: int
     warmup_steps: int
     repeat: int
@@ -126,6 +127,7 @@ class TrainingConfig:
             n_layers=args.n_layers,
             dropout=args.dropout,
             learning_rate=args.learning_rate,
+            gradient_sync_mode=args.gradient_sync_mode,
             steps=args.steps,
             warmup_steps=args.warmup_steps,
             repeat=args.repeat,
@@ -152,12 +154,22 @@ class TrainingConfig:
             "batch_size": self.batch_size,
             "model_config": self.model_dict(),
             "learning_rate": self.learning_rate,
+            "gradient_sync_mode": self.gradient_sync_mode,
             "seed": self.seed,
         }
 
     def fingerprint(self) -> str:
+        return self._fingerprint(self.fingerprint_dict())
+
+    def legacy_fingerprint(self) -> str:
+        values = self.fingerprint_dict()
+        values.pop("gradient_sync_mode")
+        return self._fingerprint(values)
+
+    @staticmethod
+    def _fingerprint(values: dict[str, Any]) -> str:
         encoded = json.dumps(
-            self.fingerprint_dict(),
+            values,
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -165,6 +177,12 @@ class TrainingConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> TrainingConfig:
+        values = dict(payload)
+        values.setdefault("gradient_sync_mode", "auto")
+        return cls(**values)
 
 
 @dataclass
@@ -214,6 +232,9 @@ class Trainer:
     ) -> None:
         self.args = args
         self.strategy: TrainingStrategy = create_strategy(args.strategy)
+        self.resolved_gradient_sync_mode = self.strategy.resolve_gradient_sync_mode(
+            args.gradient_sync_mode
+        )
         self.context = context or setup_distributed(
             args.backend,
             args.device,
@@ -262,6 +283,8 @@ class Trainer:
         self.resumed = False
         self.resume_path: str | None = None
         self.last_checkpoint: str | None = None
+        self.resume_deterministic: bool | None = None
+        self.resume_determinism_reason = "not_resumed"
         self._maybe_resume(args.resume)
 
     def _maybe_resume(self, resume: str | None) -> None:
@@ -275,21 +298,56 @@ class Trainer:
             if latest is None:
                 raise ValueError("未找到带 READY 标记的最新 checkpoint")
             resume_target = str(latest)
-        loaded_state, metadata = self.checkpoint_manager.load(
+        loaded = self.checkpoint_manager.load(
             resume_target,
             self.model,
             self.optimizer,
             self.config,
             self.state,
         )
-        self.state = loaded_state
+        self.state = loaded.train_state
         self.iterator.load_state_dict(
             {"seed": self.state.seed, "rank": self.context.rank}
         )
+        if loaded.rng_state is not None:
+            self._restore_rng_state(loaded.rng_state)
         self.state.resumed_from = str(resume_target)
         self.resumed = True
         self.resume_path = str(resume_target)
-        self.last_checkpoint = metadata["path"]
+        self.last_checkpoint = loaded.metadata["path"]
+        self.resume_deterministic = loaded.deterministic
+        self.resume_determinism_reason = loaded.determinism_reason
+        if self._is_legacy_gradient_sync_checkpoint(loaded.metadata):
+            self.resolved_gradient_sync_mode = "every"
+
+    def _is_legacy_gradient_sync_checkpoint(self, metadata: dict[str, Any]) -> bool:
+        return "gradient_sync_mode" not in metadata.get("config", {})
+
+    def _capture_rng_state(self) -> dict[str, torch.Tensor]:
+        state = {"cpu": torch.get_rng_state().cpu()}
+        if self.context.device.type == "cuda":
+            state["cuda"] = torch.cuda.get_rng_state(self.context.device).cpu()
+        return state
+
+    def _restore_rng_state(self, state: dict[str, torch.Tensor]) -> None:
+        torch.set_rng_state(state["cpu"].cpu())
+        if self.context.device.type == "cuda":
+            cuda_state = state.get("cuda")
+            if cuda_state is None:
+                raise ValueError("checkpoint 缺少当前 CUDA rank 的 RNG 状态")
+            torch.cuda.set_rng_state(cuda_state.cpu(), self.context.device)
+
+    def _sync_gradients_for_microbatch(self, micro_index: int) -> bool:
+        if self.config.grad_accum_steps == 1:
+            return True
+        if self.resolved_gradient_sync_mode == "every":
+            return True
+        return micro_index == self.config.grad_accum_steps - 1
+
+    def _synchronized_microbatches_per_step(self) -> int:
+        if self.resolved_gradient_sync_mode == "every":
+            return self.config.grad_accum_steps
+        return 1
 
     def _run_one_step(self) -> StepMetrics:
         _sync_device(self.context.device)
@@ -309,16 +367,18 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
         forward_started = time.perf_counter()
         last_loss = 0.0
-        for input_ids in inputs:
-            with torch.autocast(
-                device_type=self.context.device.type,
-                dtype=self.dtype,
-                enabled=self.dtype != torch.float32,
-            ):
-                _, loss = self.model(input_ids, input_ids)
-            assert loss is not None
-            (loss / self.config.grad_accum_steps).backward()
-            last_loss = float(loss.detach().item())
+        for micro_index, input_ids in enumerate(inputs):
+            sync_gradients = self._sync_gradients_for_microbatch(micro_index)
+            with self.strategy.gradient_sync_context(self.model, sync_gradients):
+                with torch.autocast(
+                    device_type=self.context.device.type,
+                    dtype=self.dtype,
+                    enabled=self.dtype != torch.float32,
+                ):
+                    _, loss = self.model(input_ids, input_ids)
+                assert loss is not None
+                (loss / self.config.grad_accum_steps).backward()
+                last_loss = float(loss.detach().item())
         _sync_device(self.context.device)
         forward_backward = time.perf_counter() - forward_started
 
@@ -365,6 +425,7 @@ class Trainer:
                         self.optimizer,
                         self.state,
                         self.config,
+                        self._capture_rng_state(),
                         keep_last=self.config.keep_last,
                     )
             if step_index >= warmup_steps:
@@ -426,6 +487,9 @@ class Trainer:
             "device": str(self.context.device),
             "backend": self.config.backend,
             "gradient_accumulation_steps": self.config.grad_accum_steps,
+            "gradient_sync_mode": self.config.gradient_sync_mode,
+            "resolved_gradient_sync_mode": self.resolved_gradient_sync_mode,
+            "synchronized_microbatches_per_step": self._synchronized_microbatches_per_step(),
             "activation_checkpointing": self.config.activation_checkpointing,
             **selected,
             "repeat_count": len(repeats),
@@ -445,8 +509,13 @@ class Trainer:
             "config_fingerprint": self.config.fingerprint(),
             "runtime": {
                 "strategy_impl": self.strategy.name(),
+                "gradient_sync_mode": self.config.gradient_sync_mode,
+                "resolved_gradient_sync_mode": self.resolved_gradient_sync_mode,
+                "synchronized_microbatches_per_step": self._synchronized_microbatches_per_step(),
                 "checkpoint_dir": self.args.checkpoint_dir,
                 "resume": self.resumed,
+                "resume_deterministic": self.resume_deterministic,
+                "resume_determinism_reason": self.resume_determinism_reason,
                 "resume_path": self.resume_path,
                 "last_checkpoint": self.last_checkpoint,
                 "latest_checkpoint": self._latest_checkpoint_name(),

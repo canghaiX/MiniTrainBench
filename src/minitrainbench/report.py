@@ -32,6 +32,12 @@ def _format_optional(value: float | None, suffix: str = "") -> str:
     return f"{value:.2f}{suffix}"
 
 
+def _format_optional_bool(value: bool | None) -> str:
+    if value is None:
+        return "-"
+    return "是" if value else "否"
+
+
 def render_report(paths: list[str]) -> str:
     payloads = [_load(path) for path in paths]
     training = [item for item in payloads if item.get("benchmark") == "training"]
@@ -116,8 +122,10 @@ def render_report(paths: list[str]) -> str:
             "### Runtime 状态",
             "",
             "| 策略 | GPU 数 | Strategy impl | 是否恢复 | Global step | Tokens seen | "
+            "请求同步 | 实际同步 | 同步 micro-batch/step | 精确恢复 | "
             "Latest | Keep last | Ready 数 | Resume path | Last checkpoint |",
-            "| --- | ---: | --- | --- | ---: | ---: | --- | ---: | ---: | --- | --- |",
+            "| --- | ---: | --- | --- | ---: | ---: | --- | --- | ---: | --- | "
+            "--- | ---: | ---: | --- | --- |",
         ]
     )
     for item in sorted(training, key=lambda row: (row["strategy"], row["world_size"])):
@@ -134,9 +142,24 @@ def render_report(paths: list[str]) -> str:
         ready_checkpoints = runtime.get("ready_checkpoints", "-")
         strategy_impl = runtime.get("strategy_impl", "-")
         resume_path = runtime.get("resume_path", "-") or "-"
+        gradient_sync_mode = runtime.get(
+            "gradient_sync_mode",
+            item.get("gradient_sync_mode", "-"),
+        )
+        resolved_gradient_sync_mode = runtime.get(
+            "resolved_gradient_sync_mode",
+            item.get("resolved_gradient_sync_mode", "-"),
+        )
+        synchronized_microbatches = runtime.get(
+            "synchronized_microbatches_per_step",
+            item.get("synchronized_microbatches_per_step", "-"),
+        )
+        resume_deterministic = runtime.get("resume_deterministic")
         lines.append(
             f"| {item['strategy']} | {item['world_size']} | {strategy_impl} | "
             f"{'是' if resumed else '否'} | {global_step} | {tokens_seen} | "
+            f"{gradient_sync_mode} | {resolved_gradient_sync_mode} | "
+            f"{synchronized_microbatches} | {_format_optional_bool(resume_deterministic)} | "
             f"{latest_checkpoint} | {keep_last} | {ready_checkpoints} | "
             f"{resume_path} | {last_checkpoint} |"
         )

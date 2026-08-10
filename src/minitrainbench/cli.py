@@ -5,6 +5,7 @@ import argparse
 from .communication import communication_benchmark
 from .report import write_report
 from .training import train
+from .verification import verify_checkpoints
 
 
 def _add_common_distributed_arguments(parser: argparse.ArgumentParser) -> None:
@@ -22,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--precision", choices=["fp32", "bf16"], default="bf16")
     train_parser.add_argument("--activation-checkpointing", action="store_true")
     train_parser.add_argument("--grad-accum-steps", type=int, default=1)
+    train_parser.add_argument(
+        "--gradient-sync-mode",
+        choices=["auto", "every", "last"],
+        default="auto",
+    )
     train_parser.add_argument("--batch-size", type=int, default=2)
     train_parser.add_argument("--seq-length", type=int, default=256)
     train_parser.add_argument("--vocab-size", type=int, default=16_384)
@@ -50,6 +56,23 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser = subparsers.add_parser("report", help="将 JSON benchmark 结果渲染为 Markdown")
     report_parser.add_argument("--input", nargs="+", required=True)
     report_parser.add_argument("--output", default=None)
+
+    checkpoint_parser = subparsers.add_parser(
+        "checkpoint",
+        help="检查 checkpoint 的可恢复性和一致性",
+    )
+    checkpoint_subparsers = checkpoint_parser.add_subparsers(
+        dest="checkpoint_command",
+        required=True,
+    )
+    verify_parser = checkpoint_subparsers.add_parser(
+        "verify",
+        help="比较两份同配置 checkpoint 是否精确一致",
+    )
+    _add_common_distributed_arguments(verify_parser)
+    verify_parser.add_argument("--left", required=True)
+    verify_parser.add_argument("--right", required=True)
+    verify_parser.add_argument("--output", default=None)
     return parser
 
 
@@ -82,3 +105,10 @@ def main(argv: list[str] | None = None) -> None:
         communication_benchmark(args)
     elif args.command == "report":
         print(write_report(args.input, args.output), end="")
+    elif args.command == "checkpoint" and args.checkpoint_command == "verify":
+        try:
+            result = verify_checkpoints(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+        if result is not None and not result["exact_match"]:
+            raise SystemExit("checkpoint 不一致，详见校验 JSON")
