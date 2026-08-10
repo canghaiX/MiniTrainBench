@@ -8,7 +8,7 @@ import torch
 import torch.distributed as dist
 
 from .distributed import setup_distributed
-from .training import _write_json
+from .runtime import _write_json
 
 
 def _synchronize(device: torch.device) -> None:

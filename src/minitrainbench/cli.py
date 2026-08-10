@@ -34,6 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--warmup-steps", type=int, default=5)
     train_parser.add_argument("--repeat", type=int, default=1)
     train_parser.add_argument("--seed", type=int, default=1337)
+    train_parser.add_argument("--checkpoint-dir", default=None)
+    train_parser.add_argument("--save-every", type=int, default=0)
+    train_parser.add_argument("--resume", default=None)
     train_parser.add_argument("--output", default=None)
 
     comm_parser = subparsers.add_parser("comm", help="运行 collective 通信 benchmark")
@@ -52,12 +55,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "train":
-        if args.grad_accum_steps < 1 or args.steps < 1 or args.repeat < 1 or args.warmup_steps < 0:
+        if (
+            args.grad_accum_steps < 1
+            or args.steps < 1
+            or args.repeat < 1
+            or args.warmup_steps < 0
+            or args.save_every < 0
+        ):
             raise SystemExit(
                 "steps、repeat 和 grad-accum-steps 必须为正数；"
-                "warmup 不能为负数"
+                "warmup 和 save-every 不能为负数"
             )
-        train(args)
+        if args.resume and not args.checkpoint_dir:
+            raise SystemExit("--resume 必须与 --checkpoint-dir 一起使用")
+        if args.save_every > 0 and not args.checkpoint_dir:
+            raise SystemExit("--save-every 大于 0 时必须提供 --checkpoint-dir")
+        try:
+            train(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
     elif args.command == "comm":
         if args.iters < 1 or args.warmup < 0:
             raise SystemExit("iters 必须为正数，warmup 不能为负数")

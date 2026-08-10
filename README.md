@@ -8,14 +8,16 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 - 使用 DDP、FSDP、NCCL 和 Gloo 的 PyTorch distributed 启动与运行方式。
 - 分析 DDP 吞吐优势与 FSDP 显存分片之间的实际取舍。
 - 覆盖 all-reduce、all-gather、reduce-scatter 的通信 microbenchmark。
+- 实现最小训练 Runtime：`TrainingConfig`、`TrainState`、`StepMetrics`、`Trainer`、
+  deterministic synthetic data、distributed checkpoint/resume。
 - 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
-- 自动生成包含扩展效率、显存节省和 repeat 统计的 Markdown 报告。
+- 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
 简历描述示例：
 
 > 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP 在
 > 1/2/4 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
-> smoke test 与可复现 Markdown 报告。
+> smoke test、分布式 checkpoint/resume 和可复现 Markdown 报告。
 
 ## 环境
 
@@ -109,6 +111,30 @@ docker run --rm --gpus all --ipc=host --network=host \
   --output results/fsdp_checkpoint_accum_2gpu.json
 ```
 
+验证训练 Runtime 的 checkpoint/resume：
+
+```bash
+docker run --rm --gpus all --ipc=host --network=host \
+  -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
+  torchrun --standalone --nproc_per_node=2 -m minitrainbench train \
+  --strategy ddp --precision bf16 \
+  --batch-size 2 --seq-length 256 \
+  --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 \
+  --steps 4 --warmup-steps 1 \
+  --checkpoint-dir results/runtime_ckpt/ddp_2gpu --save-every 2 \
+  --output results/ddp_2gpu_ckpt.json
+
+docker run --rm --gpus all --ipc=host --network=host \
+  -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
+  torchrun --standalone --nproc_per_node=2 -m minitrainbench train \
+  --strategy ddp --precision bf16 \
+  --batch-size 2 --seq-length 256 \
+  --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 \
+  --steps 2 --warmup-steps 0 \
+  --checkpoint-dir results/runtime_ckpt/ddp_2gpu --resume latest --save-every 2 \
+  --output results/ddp_2gpu_resume.json
+```
+
 从保存的 JSON 结果生成 Markdown 报告：
 
 ```bash
@@ -128,14 +154,14 @@ PyTorch 2.10.0 + CUDA 13.0 镜像构建的 `minitrainbench:gpu`。每行使用
 23.2M 参数 GPT-like 模型、BF16、合成 token、单 rank batch size 2、
 sequence length 256、2 个 warmup step 和 5 个测量 step。
 
-| 策略 | GPU 数 | 精度 | Tokens/sec | Step time (ms) | 最大显存 (MB) | 扩展效率 | 相对 DDP 显存节省 | 相对 DDP step 差值 (ms) | Repeats |
-| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| ddp | 1 | bf16 | 30362.52 | 16.86 | 481.47 | 100.00% | - | - | 1 |
-| ddp | 2 | bf16 | 38857.41 | 26.35 | 567.13 | 63.99% | - | - | 1 |
-| ddp | 4 | bf16 | 85459.30 | 23.96 | 615.19 | 70.37% | - | - | 1 |
-| fsdp | 1 | bf16 | 15478.27 | 33.08 | 479.77 | 100.00% | 0.35% | 16.22 | 1 |
-| fsdp | 2 | bf16 | 29016.16 | 35.29 | 274.86 | 93.73% | 51.54% | 8.94 | 1 |
-| fsdp | 4 | bf16 | 16230.08 | 126.19 | 209.60 | 26.21% | 65.93% | 102.22 | 1 |
+| 策略 | GPU 数 | 精度 | Data (ms) | 前反向 (ms) | 优化器 (ms) | Tokens/sec | Step time (ms) | 最大显存 (MB) | 扩展效率 | 相对 DDP 显存节省 | 相对 DDP step 差值 (ms) | Repeats |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ddp | 1 | bf16 | - | - | - | 30362.52 | 16.86 | 481.47 | 100.00% | - | - | 1 |
+| ddp | 2 | bf16 | - | - | - | 38857.41 | 26.35 | 567.13 | 63.99% | - | - | 1 |
+| ddp | 4 | bf16 | - | - | - | 85459.30 | 23.96 | 615.19 | 70.37% | - | - | 1 |
+| fsdp | 1 | bf16 | - | - | - | 15478.27 | 33.08 | 479.77 | 100.00% | 0.35% | 16.22 | 1 |
+| fsdp | 2 | bf16 | - | - | - | 29016.16 | 35.29 | 274.86 | 93.73% | 51.54% | 8.94 | 1 |
+| fsdp | 4 | bf16 | - | - | - | 16230.08 | 126.19 | 209.60 | 26.21% | 65.93% | 102.22 | 1 |
 
 4 卡 NCCL collective 结果：
 
@@ -170,8 +196,31 @@ FSDP 理解为显存扩展路径，而不是小模型吞吐优化路径。
 activation checkpointing 通过额外重计算换取更低 activation 显存；gradient
 accumulation 则通过在同步点之间累积更多计算，减少优化器更新频率。
 
+## 训练 Runtime 设计
+
+`minitrainbench train` 现在由 `Trainer` 驱动。`TrainingConfig` 统一记录模型、
+精度、batch、gradient accumulation、warmup、steps 和 seed；`TrainState`
+记录 `global_step`、`micro_step`、`tokens_seen`、seed 与配置 fingerprint；
+`StepMetrics` 拆分 data、forward/backward、optimizer 和整体 step time。
+
+synthetic token 数据按 `seed + global_step + rank` 的确定性规则生成。恢复训练时，
+Runtime 从 checkpoint 中的 `global_step` 继续生成下一个 batch，避免重复消费或
+跳过 synthetic step。
+
+checkpoint 使用 `torch.distributed.checkpoint` 保存模型、optimizer 和训练状态。
+DDP 与 FSDP 走同一套保存/加载入口，FSDP 可保留 sharded model/optimizer state。
+保存目录采用 `step_00000010/` 形式；只有包含 `READY` 标记的目录会被视为可恢复。
+写入过程先进入临时目录，所有 rank 完成 DCP 保存后再由 rank 0 写入 `metadata.json`、
+中文 `metadata_zh.md`、READY 标记和 `latest` 指针，降低半成品 checkpoint 被误用的
+风险。
+
+当前 v1 只支持同 strategy、同 precision、同 world size、同模型配置和同关键训练
+参数恢复；不匹配时会立即拒绝，并打印具体字段差异。跨 world size resharding、
+异构后端迁移和 profiler trace 暂不放入这个最小 Runtime。
+
 ## CPU CI
 
 GitHub Actions 会安装 CPU 版 PyTorch wheel，并运行 tiny GPT forward/backward
-测试、单进程训练 smoke test 和两进程 Gloo collective test。NCCL 和 GPU 相关
+测试、单进程训练 smoke test、checkpoint/resume、确定性 synthetic data、两进程
+Gloo collective test、Markdown 报告渲染和 `ruff check .`。NCCL 和 GPU 相关
 FSDP 性能实验保留为本地 Docker benchmark。
