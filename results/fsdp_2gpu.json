@@ -1,0 +1,33 @@
+{
+  "activation_checkpointing": false,
+  "backend": "nccl",
+  "batch_size_per_rank": 2,
+  "benchmark": "training",
+  "device": "cuda:0",
+  "environment": {
+    "cuda": "13.0",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "python": "3.10.12",
+    "torch": "2.10.0+cu130"
+  },
+  "global_batch_size": 4,
+  "gradient_accumulation_steps": 1,
+  "loss": 76.37945556640625,
+  "max_cuda_memory_mb": 274.85546875,
+  "model_config": {
+    "d_model": 512,
+    "dropout": 0.0,
+    "n_heads": 8,
+    "n_layers": 6,
+    "seq_length": 256,
+    "vocab_size": 8192
+  },
+  "parameters": 23240704,
+  "precision": "bf16",
+  "step_time_ms": 35.290684551000595,
+  "steps": 5,
+  "strategy": "fsdp",
+  "tokens_per_sec": 29016.15576541619,
+  "warmup_steps": 2,
+  "world_size": 2
+}

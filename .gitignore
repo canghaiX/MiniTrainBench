@@ -1,0 +1,9 @@
+.pytest_cache/
+__pycache__/
+*.pyc
+dist/
+build/
+*.egg-info/
+results/*_smoke.json
+results/single_*.json
+results/*features_smoke.json

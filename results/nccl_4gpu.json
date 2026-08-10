@@ -1,0 +1,97 @@
+{
+  "backend": "nccl",
+  "benchmark": "communication",
+  "device": "cuda:0",
+  "dtype": "float32",
+  "iters": 50,
+  "results": [
+    {
+      "bandwidth_gbps": 0.07561868987654614,
+      "bytes": 4096,
+      "elements": 1024,
+      "latency_ms": 0.054166503105079755,
+      "operation": "all_reduce",
+      "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 0.1217209090184643,
+      "bytes": 16384,
+      "elements": 1024,
+      "latency_ms": 0.13460300397127867,
+      "operation": "all_gather",
+      "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 0.2688239053074637,
+      "bytes": 16384,
+      "elements": 1024,
+      "latency_ms": 0.060946960729779676,
+      "operation": "reduce_scatter",
+      "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 41.17223015075372,
+      "bytes": 4194304,
+      "elements": 1048576,
+      "latency_ms": 0.10187215957557783,
+      "operation": "all_reduce",
+      "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 72.43305075652438,
+      "bytes": 16777216,
+      "elements": 1048576,
+      "latency_ms": 0.2316237660124898,
+      "operation": "all_gather",
+      "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 129.76810724402364,
+      "bytes": 16777216,
+      "elements": 1048576,
+      "latency_ms": 0.12928612704854459,
+      "operation": "reduce_scatter",
+      "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 103.57715942147786,
+      "bytes": 67108864,
+      "elements": 16777216,
+      "latency_ms": 0.6479118019342422,
+      "operation": "all_reduce",
+      "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 44.06188102722334,
+      "bytes": 268435456,
+      "elements": 16777216,
+      "latency_ms": 6.092237774282694,
+      "operation": "all_gather",
+      "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 147.65195061850235,
+      "bytes": 268435456,
+      "elements": 16777216,
+      "latency_ms": 1.818028511479497,
+      "operation": "reduce_scatter",
+      "status": "ok",
+      "world_size": 4
+    }
+  ],
+  "sizes": [
+    1024,
+    1048576,
+    16777216
+  ],
+  "warmup": 10,
+  "world_size": 4
+}
