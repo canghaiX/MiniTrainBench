@@ -4,6 +4,20 @@ MiniTrainBench is a small, reproducible benchmark for distributed GPT-like
 training with PyTorch DDP and FSDP. It uses synthetic token data, so runs do
 not depend on a dataset download.
 
+## What this demonstrates for training infrastructure
+
+- PyTorch distributed launch patterns with DDP, FSDP, NCCL, and Gloo.
+- Practical tradeoff analysis between DDP throughput and FSDP memory sharding.
+- Communication microbenchmarks for all-reduce, all-gather, and reduce-scatter.
+- Reproducible GPU runs through Docker and non-GPU smoke coverage in CI.
+- Report generation with scaling efficiency, memory saving, and repeat statistics.
+
+Resume-friendly summary:
+
+> Built a Dockerized distributed LLM training benchmark that compares PyTorch
+> DDP/FSDP throughput, step time, memory, and NCCL collective behavior across
+> 1/2/4 GPUs, with CPU CI smoke tests and reproducible Markdown reports.
+
 ## Environment
 
 The project does not install PyTorch into the host Python environment. Build
@@ -35,6 +49,17 @@ python -m pip install -e .
 
 ## Reproduction
 
+Run the full A100 matrix:
+
+```bash
+IMAGE=minitrainbench:gpu REPEAT=1 scripts/run_a100_matrix.sh
+```
+
+The script runs 1/2/4 GPU DDP, 1/2/4 GPU FSDP, 4-GPU NCCL collectives, and
+then regenerates `results/report.md`. Override `GPUS`, `STEPS`,
+`WARMUP_STEPS`, `REPEAT`, `OUT_DIR`, or model size environment variables when
+you need a longer run.
+
 Run one short DDP benchmark per GPU count:
 
 ```bash
@@ -45,7 +70,7 @@ for n in 1 2 4; do
     torchrun --standalone --nproc_per_node="$n" -m minitrainbench train \
       --strategy ddp --precision bf16 --batch-size 2 --seq-length 256 \
       --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 \
-      --steps 5 --warmup-steps 2 \
+      --steps 5 --warmup-steps 2 --repeat 1 \
       --output "results/ddp_${n}gpu.json"
 done
 ```
@@ -59,7 +84,7 @@ for n in 1 2 4; do
     torchrun --standalone --nproc_per_node="$n" -m minitrainbench train \
       --strategy fsdp --precision bf16 --batch-size 2 --seq-length 256 \
       --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 \
-      --steps 5 --warmup-steps 2 \
+      --steps 5 --warmup-steps 2 --repeat 1 \
       --output "results/fsdp_${n}gpu.json"
 done
 ```
@@ -84,7 +109,7 @@ docker run --rm --gpus all --ipc=host --network=host \
   --strategy fsdp --precision bf16 --activation-checkpointing \
   --grad-accum-steps 2 --batch-size 1 --seq-length 256 \
   --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 \
-  --steps 5 --warmup-steps 2 \
+  --steps 5 --warmup-steps 2 --repeat 3 \
   --output results/fsdp_checkpoint_accum_2gpu.json
 ```
 
@@ -108,14 +133,14 @@ PyTorch 2.10.0 + CUDA 13.0 image. Each row uses a 23.2M-parameter GPT-like
 model, BF16, synthetic tokens, per-rank batch size 2, sequence length 256,
 2 warmup steps, and 5 measured steps.
 
-| Strategy | GPUs | Precision | Tokens/sec | Step time (ms) | Max memory (MB) |
-| --- | ---: | --- | ---: | ---: | ---: |
-| ddp | 1 | bf16 | 30362.52 | 16.86 | 481.47 |
-| ddp | 2 | bf16 | 38857.41 | 26.35 | 567.13 |
-| ddp | 4 | bf16 | 85459.30 | 23.96 | 615.19 |
-| fsdp | 1 | bf16 | 15478.27 | 33.08 | 479.77 |
-| fsdp | 2 | bf16 | 29016.16 | 35.29 | 274.86 |
-| fsdp | 4 | bf16 | 16230.08 | 126.19 | 209.60 |
+| Strategy | GPUs | Precision | Tokens/sec | Step time (ms) | Max memory (MB) | Scaling efficiency | Memory saving vs DDP | Step delta vs DDP (ms) | Repeats |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ddp | 1 | bf16 | 30362.52 | 16.86 | 481.47 | 100.00% | - | - | 1 |
+| ddp | 2 | bf16 | 38857.41 | 26.35 | 567.13 | 63.99% | - | - | 1 |
+| ddp | 4 | bf16 | 85459.30 | 23.96 | 615.19 | 70.37% | - | - | 1 |
+| fsdp | 1 | bf16 | 15478.27 | 33.08 | 479.77 | 100.00% | 0.35% | 16.22 | 1 |
+| fsdp | 2 | bf16 | 29016.16 | 35.29 | 274.86 | 93.73% | 51.54% | 8.94 | 1 |
+| fsdp | 4 | bf16 | 16230.08 | 126.19 | 209.60 | 26.21% | 65.93% | 102.22 | 1 |
 
 4-GPU NCCL collective results:
 

@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--learning-rate", type=float, default=3e-4)
     train_parser.add_argument("--steps", type=int, default=20)
     train_parser.add_argument("--warmup-steps", type=int, default=5)
+    train_parser.add_argument("--repeat", type=int, default=1)
     train_parser.add_argument("--seed", type=int, default=1337)
     train_parser.add_argument("--output", default=None)
 
@@ -51,8 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     if args.command == "train":
-        if args.grad_accum_steps < 1 or args.steps < 1 or args.warmup_steps < 0:
-            raise SystemExit("steps and grad-accum-steps must be positive; warmup cannot be negative")
+        if args.grad_accum_steps < 1 or args.steps < 1 or args.repeat < 1 or args.warmup_steps < 0:
+            raise SystemExit(
+                "steps, repeat, and grad-accum-steps must be positive; "
+                "warmup cannot be negative"
+            )
         train(args)
     elif args.command == "comm":
         if args.iters < 1 or args.warmup < 0:

@@ -2,3 +2,4 @@
 --extra-index-url https://pypi.org/simple
 torch==2.7.0+cpu
 pytest>=8.0,<9
+ruff>=0.5,<1
