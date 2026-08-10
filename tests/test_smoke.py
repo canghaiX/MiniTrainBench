@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,7 @@ torch = pytest.importorskip("torch")
 
 from minitrainbench.checkpoint import CheckpointManager
 from minitrainbench.data import SyntheticTokenIterator
+from minitrainbench.deepspeed_benchmark import build_deepspeed_config
 from minitrainbench.distributed import DistributedContext
 from minitrainbench.model import GPTConfig, MiniGPT
 from minitrainbench.report import render_report
@@ -81,7 +83,10 @@ def test_cpu_training_smoke(tmp_path) -> None:
     result = json.loads(output.read_text())
     assert result["strategy"] == "ddp"
     assert result["repeat_count"] == 2
+    assert result["trial_protocol"] == "independent_reinitialize"
     assert len(result["repeats"]) == 2
+    assert [repeat["global_step"] for repeat in result["repeats"]] == [1, 1]
+    assert [repeat["tokens_seen"] for repeat in result["repeats"]] == [16, 16]
     assert "summary" in result
     assert result["tokens_per_sec"] > 0
     assert "step_time_ms" in completed.stdout
@@ -95,6 +100,28 @@ def test_strategy_registry_creates_supported_strategies() -> None:
     assert create_strategy("fsdp").requires_process_group() is True
     with pytest.raises(ValueError, match="不支持的训练策略"):
         create_strategy("unknown")
+
+
+def test_deepspeed_config_builder_zero_stages() -> None:
+    args = SimpleNamespace(
+        batch_size=2,
+        grad_accum_steps=4,
+        precision="bf16",
+        zero_stage=2,
+    )
+    zero2 = build_deepspeed_config(args, world_size=8)
+    assert zero2["train_batch_size"] == 64
+    assert zero2["bf16"]["enabled"] is True
+    assert zero2["zero_optimization"]["stage"] == 2
+    assert "stage3_prefetch_bucket_size" not in zero2["zero_optimization"]
+
+    args.zero_stage = 3
+    args.precision = "fp32"
+    zero3 = build_deepspeed_config(args, world_size=2)
+    assert zero3["train_batch_size"] == 16
+    assert zero3["bf16"]["enabled"] is False
+    assert zero3["zero_optimization"]["stage"] == 3
+    assert "stage3_prefetch_bucket_size" in zero3["zero_optimization"]
 
 
 def test_gradient_sync_policy_and_no_sync_context() -> None:
@@ -161,6 +188,91 @@ def test_cpu_gradient_sync_result(tmp_path) -> None:
     assert result["resolved_gradient_sync_mode"] == "last"
     assert result["synchronized_microbatches_per_step"] == 1
     assert result["runtime"]["resume_deterministic"] is None
+
+
+def test_cpu_profiler_smoke(tmp_path) -> None:
+    trace_dir = tmp_path / "trace"
+    _run_module(
+        "profile",
+        "--device",
+        "cpu",
+        "--strategy",
+        "ddp",
+        "--precision",
+        "fp32",
+        "--batch-size",
+        "1",
+        "--seq-length",
+        "8",
+        "--vocab-size",
+        "64",
+        "--d-model",
+        "16",
+        "--n-heads",
+        "4",
+        "--n-layers",
+        "1",
+        "--profile-wait",
+        "0",
+        "--profile-warmup",
+        "0",
+        "--profile-active",
+        "1",
+        "--trace-dir",
+        str(trace_dir),
+        timeout=240,
+    )
+    summary = json.loads((trace_dir / "profile_summary.json").read_text())
+    assert summary["benchmark"] == "profile"
+    assert summary["world_size"] == 1
+    assert summary["step_breakdown"]["step_time_ms"]["mean"] > 0
+    assert (trace_dir / "rank_00000.trace.json").is_file()
+    assert (trace_dir / "profile_summary.md").is_file()
+
+
+def test_repeat_conflicts_with_checkpoint_args(tmp_path) -> None:
+    checkpoint_dir = tmp_path / "checkpoints"
+    failed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "minitrainbench",
+            "train",
+            "--device",
+            "cpu",
+            "--strategy",
+            "ddp",
+            "--precision",
+            "fp32",
+            "--batch-size",
+            "1",
+            "--seq-length",
+            "8",
+            "--vocab-size",
+            "64",
+            "--d-model",
+            "16",
+            "--n-heads",
+            "4",
+            "--n-layers",
+            "1",
+            "--steps",
+            "1",
+            "--warmup-steps",
+            "0",
+            "--repeat",
+            "2",
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=os.environ.copy(),
+        timeout=60,
+    )
+    assert failed.returncode != 0
+    assert "独立 benchmark trial" in failed.stderr
 
 
 def test_gloo_ddp_gradient_accumulation_auto_smoke(tmp_path) -> None:
@@ -631,6 +743,58 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
                 "tokens_seen": 1536,
             },
         },
+        "zero2_1.json": {
+            "benchmark": "training",
+            "strategy": "deepspeed_zero2",
+            "world_size": 1,
+            "precision": "bf16",
+            "tokens_per_sec": 100.0,
+            "step_time_ms": 20.0,
+            "max_cuda_memory_mb": 700.0,
+            "repeat_count": 1,
+            "trial_protocol": "single_run",
+            "runtime": {
+                "strategy_impl": "DeepSpeedZeRO2",
+                "zero_stage": 2,
+                "trial_protocol": "single_run",
+            },
+        },
+        "zero2_2.json": {
+            "benchmark": "training",
+            "strategy": "deepspeed_zero2",
+            "world_size": 2,
+            "precision": "bf16",
+            "tokens_per_sec": 180.0,
+            "step_time_ms": 14.0,
+            "max_cuda_memory_mb": 500.0,
+            "repeat_count": 2,
+            "trial_protocol": "independent_reinitialize",
+            "summary": {
+                "tokens_per_sec": {
+                    "mean": 180.0,
+                    "std": 5.0,
+                    "min": 175.0,
+                    "max": 185.0,
+                },
+                "step_time_ms": {"mean": 14.0, "std": 0.4, "min": 13.6, "max": 14.4},
+                "max_cuda_memory_mb": {
+                    "mean": 500.0,
+                    "std": 1.0,
+                    "min": 499.0,
+                    "max": 501.0,
+                },
+            },
+            "runtime": {
+                "strategy_impl": "DeepSpeedZeRO2",
+                "zero_stage": 2,
+                "trial_protocol": "independent_reinitialize",
+                "resume": False,
+                "keep_last": 0,
+                "ready_checkpoints": 0,
+                "global_step": 25,
+                "tokens_seen": 4096,
+            },
+        },
         "comm.json": {
             "benchmark": "communication",
             "results": [
@@ -664,7 +828,11 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
     assert "every" in report
     assert "step_00000003" in report
     assert "前反向" in report
+    assert "120.00 ± 2.00" in report
+    assert "DeepSpeedZeRO2" in report
+    assert "independent_reinitialize" in report
     assert "75.00%" in report
     assert "50.00%" in report
+    assert "54.55%" in report
     assert "4.00" in report
     assert "小规模 collective 更容易受延迟限制" in report

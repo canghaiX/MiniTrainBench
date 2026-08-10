@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import platform
 import statistics
@@ -246,6 +247,35 @@ class Trainer:
         self.dtype = _precision_dtype(args.precision, self.context.device)
         self.config = TrainingConfig.from_args(args, self.context)
         self.model_config = GPTConfig(**self.config.model_dict())
+        self.checkpoint_manager = CheckpointManager(
+            root=args.checkpoint_dir,
+            context=self.context,
+        )
+        self.resumed = False
+        self.resume_path: str | None = None
+        self.last_checkpoint: str | None = None
+        self.resume_deterministic: bool | None = None
+        self.resume_determinism_reason = "not_resumed"
+        self.parameter_count = 0
+        self._initialize_training_objects()
+        self._maybe_resume(args.resume)
+
+    def _seed_training_objects(self) -> None:
+        torch.manual_seed(self.config.seed + self.context.rank)
+        if self.context.device.type == "cuda":
+            torch.cuda.manual_seed_all(self.config.seed + self.context.rank)
+
+    def _initialize_training_objects(self) -> None:
+        self.context.barrier()
+        if hasattr(self, "model"):
+            del self.model
+        if hasattr(self, "optimizer"):
+            del self.optimizer
+        gc.collect()
+        if self.context.device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        self._seed_training_objects()
         self.state = TrainState(
             seed=self.config.seed,
             config_fingerprint=self.config.fingerprint(),
@@ -257,35 +287,21 @@ class Trainer:
             seed=self.config.seed,
             rank=self.context.rank,
         )
-
-        torch.manual_seed(self.config.seed + self.context.rank)
-        if self.context.device.type == "cuda":
-            torch.cuda.manual_seed_all(self.config.seed + self.context.rank)
         model = MiniGPT(
             self.model_config,
             activation_checkpointing=self.config.activation_checkpointing,
         ).to(self.context.device)
         self.parameter_count = count_parameters(model)
-        model = self.strategy.wrap_model(
+        self.model = self.strategy.wrap_model(
             model,
             self.context,
             self.config.precision,
         )
-        self.model = model
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.config.learning_rate,
         )
-        self.checkpoint_manager = CheckpointManager(
-            root=args.checkpoint_dir,
-            context=self.context,
-        )
-        self.resumed = False
-        self.resume_path: str | None = None
-        self.last_checkpoint: str | None = None
-        self.resume_deterministic: bool | None = None
-        self.resume_determinism_reason = "not_resumed"
-        self._maybe_resume(args.resume)
+        self.context.barrier()
 
     def _maybe_resume(self, resume: str | None) -> None:
         if not resume:
@@ -418,16 +434,19 @@ class Trainer:
         measured: list[StepMetrics] = []
         for step_index in range(warmup_steps + measured_steps):
             metrics = self._run_one_step()
-            if self.checkpoint_manager.enabled and self.args.save_every:
-                if self.state.global_step % self.args.save_every == 0:
-                    self.last_checkpoint = self.checkpoint_manager.save(
-                        self.model,
-                        self.optimizer,
-                        self.state,
-                        self.config,
-                        self._capture_rng_state(),
-                        keep_last=self.config.keep_last,
-                    )
+            if (
+                self.checkpoint_manager.enabled
+                and self.args.save_every
+                and self.state.global_step % self.args.save_every == 0
+            ):
+                self.last_checkpoint = self.checkpoint_manager.save(
+                    self.model,
+                    self.optimizer,
+                    self.state,
+                    self.config,
+                    self._capture_rng_state(),
+                    keep_last=self.config.keep_last,
+                )
             if step_index >= warmup_steps:
                 measured.append(metrics)
         local = {
@@ -469,6 +488,7 @@ class Trainer:
         self,
         repeats: list[dict[str, Any]],
         summary: dict[str, Any],
+        trial_protocol: str,
     ) -> dict[str, Any]:
         selected = {
             "tokens_per_sec": summary["tokens_per_sec"]["mean"],
@@ -496,6 +516,7 @@ class Trainer:
             "parameters": self.parameter_count,
             "steps": self.config.steps,
             "warmup_steps": self.config.warmup_steps,
+            "trial_protocol": trial_protocol,
             "batch_size_per_rank": self.config.batch_size,
             "global_batch_size": (
                 self.config.batch_size
@@ -509,6 +530,7 @@ class Trainer:
             "config_fingerprint": self.config.fingerprint(),
             "runtime": {
                 "strategy_impl": self.strategy.name(),
+                "trial_protocol": trial_protocol,
                 "gradient_sync_mode": self.config.gradient_sync_mode,
                 "resolved_gradient_sync_mode": self.resolved_gradient_sync_mode,
                 "synchronized_microbatches_per_step": self._synchronized_microbatches_per_step(),
@@ -554,17 +576,34 @@ class Trainer:
         try:
             if self.context.device.type == "cuda":
                 torch.cuda.empty_cache()
-            self.model.train()
             self.context.barrier()
             repeats: list[dict[str, Any]] = []
             repeat_count = 1 if self.resumed else self.config.repeat
+            trial_protocol = (
+                "independent_reinitialize" if repeat_count > 1 else "single_run"
+            )
             for repeat_index in range(repeat_count):
+                if repeat_index > 0:
+                    self._initialize_training_objects()
+                self.model.train()
                 warmup = 0 if self.resumed else self.config.warmup_steps
                 metrics = self._run_window(warmup, self.config.steps)
                 if self.context.is_main:
-                    repeats.append({"repeat_index": repeat_index, **metrics})
+                    repeats.append(
+                        {
+                            "repeat_index": repeat_index,
+                            "trial_protocol": trial_protocol,
+                            "global_step": self.state.global_step,
+                            "tokens_seen": self.state.tokens_seen,
+                            **metrics,
+                        }
+                    )
             summary = _summarize_repeats(repeats) if self.context.is_main else {}
-            result = self._result(repeats, summary) if self.context.is_main else None
+            result = (
+                self._result(repeats, summary, trial_protocol)
+                if self.context.is_main
+                else None
+            )
             if self.context.is_main and result is not None:
                 _write_json(self.args.output, result)
                 print(json.dumps(result, indent=2, sort_keys=True))

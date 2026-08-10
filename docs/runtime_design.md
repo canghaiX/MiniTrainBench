@@ -16,6 +16,11 @@
 - `TrainingStrategy`：隔离 DDP/FSDP 的进程组需求和模型包装逻辑，是后续扩展
   训练策略的插件边界，同时决定 gradient accumulation 的默认同步策略。
 
+Profiler 和 DeepSpeed ZeRO 没有直接塞进 `Trainer` 主循环。`profile` 命令复用
+`Trainer` 的单 step 执行路径，只在独立入口里打开 PyTorch Profiler；DeepSpeed ZeRO
+使用独立 adapter 运行 benchmark，不复用 DCP checkpoint/resume。这样核心 Runtime
+仍然聚焦 DDP/FSDP 的训练状态、同步策略和 checkpoint 正确性。
+
 ## Strategy 生命周期
 
 `Trainer` 先通过 registry 创建 `TrainingStrategy`，再用
@@ -24,8 +29,23 @@
 不再关心具体 strategy 分支。
 
 当前内置 `DDPStrategy` 和 `FSDPStrategy`。这个边界的目的不是把项目做复杂，而是
-让训练循环、状态推进、指标聚合和 checkpoint 生命周期保持稳定；后续增加 ZeRO、
-实验性 wrapper 或异构设备策略时，只需要补新的 strategy 实现和 registry 项。
+让训练循环、状态推进、指标聚合和 checkpoint 生命周期保持稳定；后续增加实验性
+wrapper 或异构设备策略时，只需要补新的 strategy 实现和 registry 项。
+
+本项目当前没有把 DeepSpeed 作为 `TrainingStrategy` 注册。原因是 DeepSpeed Engine
+本身接管 backward、step、gradient accumulation 和 checkpoint 语义；如果直接混入
+`Trainer`，会让 DDP/FSDP 的 DCP checkpoint 生命周期与 DeepSpeed checkpoint 生命周期
+交叉。当前选择是用 `minitrainbench deepspeed` 做横向 benchmark，对外暴露统一 JSON
+结果，但内部保持独立。
+
+## Repeat 实验协议
+
+`--repeat N` 用于性能稳定性统计，不用于训练恢复。`N > 1` 时，每个 trial 都重新创建
+模型、optimizer、`TrainState` 和 deterministic synthetic iterator，并从相同 seed
+开始。报告中的 `summary` 记录 `mean/std/min/max`，Markdown 主表渲染为 `mean ± std`。
+
+`repeat > 1` 与 `--checkpoint-dir`、`--save-every`、`--resume` 互斥。这样可以避免把
+“独立 benchmark trial”和“preemption/resume 训练状态推进”混在同一次运行里。
 
 ## Gradient Accumulation 同步
 
@@ -83,4 +103,15 @@ state digest。任一项不一致会以非零状态退出，并将诊断写入 J
 v2 恢复和 verify 都要求 strategy、precision、world size、模型配置和关键训练参数一致。
 这覆盖了训练 Runtime 的基础安全性，也避免把跨 world size resharding、异构设备
 迁移等更重的能力混入当前项目。后续如果要继续深化，可以增加 resharding、
-分层 retention policy 和 profiler trace。
+分层 retention policy、多机 checkpoint 发现和 DeepSpeed checkpoint 对齐。
+
+## Profiler 入口
+
+`minitrainbench profile` 使用 PyTorch Profiler 采集每 rank Chrome trace。普通
+benchmark 不默认启用 profiler，因为 profiler 会改变 step time；项目把“产出稳定数值”
+和“定位性能瓶颈”拆成两个入口。
+
+Profiler 输出包含每 rank trace、rank summary、rank 0 聚合 JSON 和 Markdown。Markdown
+中保留 data、forward/backward、optimizer step breakdown，以及 CUDA/CPU top ops 和
+collective 线索。trace 文件通常较大，默认由 `.gitignore` 排除；仓库只需要提交摘要和
+复现命令。

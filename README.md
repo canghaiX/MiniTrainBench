@@ -7,22 +7,25 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 
 ## 面向训练基础设施的能力展示
 
-- 使用 DDP、FSDP、NCCL 和 Gloo 的 PyTorch distributed 启动与运行方式。
-- 分析 DDP 吞吐优势与 FSDP 显存分片之间的实际取舍。
+- 使用 DDP、FSDP、DeepSpeed ZeRO、NCCL 和 Gloo 的分布式训练启动与运行方式。
+- 分析 DDP 吞吐优势、FSDP 显存分片和 ZeRO optimizer/parameter sharding 之间的实际取舍。
 - 覆盖 all-reduce、all-gather、reduce-scatter 的通信 microbenchmark。
 - 实现最小训练 Runtime：`TrainingConfig`、`TrainState`、`StepMetrics`、`Trainer`、
   deterministic synthetic data、distributed checkpoint/resume。
 - 使用可插拔 strategy 抽象隔离 DDP/FSDP 包装逻辑，并支持 checkpoint retention。
 - 提供 DDP/FSDP gradient accumulation 同步策略，并展示通信与显存取舍。
 - 保存每个 rank 的 RNG 状态，支持带 dropout 的精确 checkpoint/resume 校验。
+- 支持独立 repeat trial，报告 `mean ± std`，避免单次短跑被当成严谨性能结论。
+- 支持 PyTorch Profiler，导出每 rank Chrome trace 与 rank 0 Markdown 摘要。
 - 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
 - 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
 简历描述示例：
 
-> 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP 在
-> 1/2/4/8 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
-> smoke test、可插拔训练策略、精确分布式 checkpoint/resume 和可复现 Markdown 报告。
+> 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP/DeepSpeed
+> ZeRO 在 1/2/4/8 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
+> smoke test、Profiler trace、可插拔训练策略、精确分布式 checkpoint/resume 和可复现
+> Markdown 报告。
 
 ## 训练框架能力点
 
@@ -41,6 +44,10 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
   也可显式切换到 `last`。
 - checkpoint v2 在 `READY` 前保存每个 rank 的 CPU/CUDA RNG 状态；`checkpoint verify`
   可比较两份 DDP/FSDP checkpoint 的模型、optimizer、TrainState 和 RNG digest。
+- `minitrainbench profile` 使用 PyTorch Profiler 采集每 rank trace，保留 step 拆分和
+  collective 线索，便于从吞吐数字追到具体性能瓶颈。
+- DeepSpeed ZeRO 作为独立 adapter 接入 `minitrainbench deepspeed`，不接管现有
+  DCP checkpoint/resume，避免两套 engine 生命周期混在一起。
 
 ## 环境
 
@@ -52,6 +59,19 @@ docker run --rm --gpus all --ipc=host --network=host \
   -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
   python -m pytest
 ```
+
+如果要运行 DeepSpeed ZeRO-2/ZeRO-3 对比，请构建可选镜像：
+
+```bash
+export HTTPS_PROXY=http://your-proxy.example:80
+docker build --target gpu-deepspeed \
+  --secret id=https_proxy,env=HTTPS_PROXY \
+  -t minitrainbench:deepspeed .
+```
+
+该 target 默认安装 `deepspeed==0.19.4`，并设置 `DS_BUILD_OPS=0`，避免在
+benchmark 环境里编译 fused optimizer 扩展。默认 `docker build -t minitrainbench:gpu .`
+仍然只生成基础 GPU benchmark 镜像。
 
 默认基础镜像是 `pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime`。
 如果需要使用内网镜像，可以覆盖 `BASE_IMAGE`：
@@ -71,7 +91,7 @@ python -m pip install -e .
 
 ## 复现
 
-运行完整 A100 实验矩阵：
+运行短跑 A100 覆盖矩阵：
 
 ```bash
 IMAGE=minitrainbench:gpu REPEAT=1 scripts/run_a100_matrix.sh
@@ -81,6 +101,17 @@ IMAGE=minitrainbench:gpu REPEAT=1 scripts/run_a100_matrix.sh
 并重新生成 `results/report.md`。如需更长实验，可以通过 `GPUS`、`STEPS`、
 `WARMUP_STEPS`、`REPEAT`、`OUT_DIR`、`COMM_NPROC` 或模型规模相关环境变量覆盖
 默认配置。没有 8 卡时可使用 `GPUS="1 2 4" COMM_NPROC=4` 降级运行。
+
+运行更适合写进实验结论的 `repeat=3` 稳定性矩阵：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_a100_stability_matrix.sh
+```
+
+该脚本默认跑 1/2/4/8 卡 DDP、1/2/4/8 卡 FSDP 和 8 卡 NCCL，使用
+`warmup_steps=5`、`steps=20`、`repeat=3`，结果写到
+`results/stability_repeat3/`。每个 repeat 都会重新初始化模型、optimizer 和
+deterministic synthetic iterator，报告中主指标渲染为 `mean ± std`。
 
 按 GPU 数运行短版 DDP benchmark：
 
@@ -182,6 +213,28 @@ IMAGE=minitrainbench:gpu scripts/run_gradient_sync_matrix.sh
 输出 JSON 和 `results/gradient_sync/report.md`。可通过 `NPROC`、`STEPS`、
 `WARMUP_STEPS`、`REPEAT`、`GRAD_ACCUM_STEPS` 和模型规模相关环境变量覆盖默认值。
 
+运行 2 卡 DDP/FSDP PyTorch Profiler trace：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_profiler_matrix.sh
+```
+
+每个 rank 会生成 `rank_00000.trace.json` 形式的 Chrome trace，并由 rank 0 汇总
+`profile_summary.json` 和 `profile_summary.md`。原始 trace 默认不提交到 Git；
+可在本地用 `chrome://tracing` 或 Perfetto 打开，结合 Markdown 摘要判断
+forward/backward、optimizer 或 collective 是否是主要瓶颈。
+
+运行 DeepSpeed ZeRO-2/ZeRO-3 对比矩阵：
+
+```bash
+docker build --target gpu-deepspeed -t minitrainbench:deepspeed .
+IMAGE=minitrainbench:deepspeed scripts/run_zero_matrix.sh
+```
+
+该脚本默认跑 1/2/4/8 卡 DDP baseline、ZeRO-2 和 ZeRO-3，使用与稳定性矩阵一致的
+`warmup_steps=5`、`steps=20`、`repeat=3`，结果写到 `results/zero_repeat3/`。
+DeepSpeed adapter 只负责 benchmark，不接入当前 DCP checkpoint/resume。
+
 验证带 dropout 的精确 FSDP resume：
 
 ```bash
@@ -215,9 +268,23 @@ docker run --rm -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
   --output results/report.md
 ```
 
+## 实验方法
+
+MiniTrainBench 区分两种实验口径：
+
+- 短跑覆盖矩阵：默认 `warmup_steps=2`、`steps=5`、`repeat=1`，用于快速确认
+  1/2/4/8 卡 DDP/FSDP/NCCL 都能跑通。
+- 稳定性矩阵：默认 `warmup_steps=5`、`steps=20`、`repeat=3`，用于报告更可信的
+  `mean ± std`。每个 repeat 都会独立重建模型、optimizer、训练状态和 synthetic data
+  iterator，因此方差反映运行时波动，而不是同一训练状态连续推进后的混合窗口。
+
+`repeat > 1` 与 checkpoint/resume 互斥。这样 benchmark trial 与训练 Runtime 恢复语义
+保持分离，避免把“性能稳定性实验”和“中断恢复实验”混在同一份 JSON 里。
+
 ## 实验表格
 
-下表在当前主机生成，机器可用 8x NVIDIA A100-SXM4-40GB。实验使用本地
+下表是当前仓库已保存的 repeat=1 短跑基线，在当前主机生成，机器可用
+8x NVIDIA A100-SXM4-40GB。实验使用本地
 PyTorch 2.10.0 + CUDA 13.0 镜像构建的 `minitrainbench:gpu`。每行使用
 23.2M 参数 GPT-like 模型、BF16、合成 token、单 rank batch size 2、
 sequence length 256、2 个 warmup step 和 5 个测量 step。
@@ -260,6 +327,28 @@ sequence length 256、2 个 warmup step 和 5 个测量 step。
 和“2 step 保存 + resume 1 step”的 `checkpoint verify` 结果为 `exact_match=true`：
 模型、optimizer、TrainState 和每 rank RNG state digest 均一致。
 
+## 性能定位证据
+
+`minitrainbench profile` 用 PyTorch Profiler 在每个 rank 采集 trace。报告中的
+step breakdown 先回答“慢在哪一段”：data、forward/backward 还是 optimizer；
+rank top ops 再帮助定位到 attention、matmul、optimizer 或 NCCL collective。Chrome
+trace 适合继续检查 kernel 时间线、rank 间等待、collective 调用频率和计算通信重叠。
+
+普通 benchmark 不默认开启 profiler，因为 profiler 会引入额外开销，影响 tokens/sec。
+因此项目把“计时用 benchmark”和“定位用 profile”拆成两个入口：前者沉淀稳定数值，
+后者沉淀性能证据。
+
+## ZeRO 对比边界
+
+DeepSpeed ZeRO-2/ZeRO-3 通过 `minitrainbench deepspeed` 单独接入。ZeRO-2 主要分片
+optimizer state 和 gradients；ZeRO-3 进一步分片 parameters，因此更接近 FSDP 的显存
+优化路径。报告会把 `deepspeed_zero2`、`deepspeed_zero3` 与同 world size 的 DDP
+baseline 对比显存和 step time。
+
+DeepSpeed adapter 不复用当前 DDP/FSDP 的 DCP checkpoint/resume，因为 DeepSpeed Engine
+有自己的状态管理和 checkpoint 生命周期。当前项目选择把 ZeRO 作为横向 benchmark，
+而不是把两套 checkpoint 语义混在同一个 `Trainer` 里。
+
 ## 瓶颈分析
 
 DDP 会在每个 rank 上保留完整的模型参数、梯度和优化器状态。它的主要分布式
@@ -300,8 +389,9 @@ time 从 130.76 ms 降到 123.82 ms，但这个 23.2M 模型没有观察到额�
 
 `TrainingStrategy` 是 `Trainer` 使用的策略插件接口。当前 registry 内置
 `DDPStrategy` 和 `FSDPStrategy`，分别负责声明是否需要初始化进程组，以及如何
-包装模型。这样后续扩展 ZeRO、设备后端或实验性 wrapper 时，不需要继续膨胀
-`Trainer` 主循环。
+包装模型。Profiler 复用 `Trainer` 的 step 执行能力，但通过独立 `profile` 命令采集
+trace；DeepSpeed ZeRO 通过独立 adapter 进入 benchmark，不接管 `Trainer` 的
+checkpoint 生命周期。
 
 synthetic token 数据按 `seed + global_step + rank` 的确定性规则生成。恢复训练时，
 Runtime 从 checkpoint 中的 `global_step` 继续生成下一个 batch，避免重复消费或
@@ -317,7 +407,7 @@ DDP 与 FSDP 走同一套保存/加载入口，FSDP 可保留 sharded model/opti
 
 当前 v2 只支持同 strategy、同 precision、同 world size、同模型配置和同关键训练
 参数恢复；不匹配时会立即拒绝，并打印具体字段差异。跨 world size resharding、
-异构后端迁移和 profiler trace 暂不放入这个最小 Runtime。
+异构后端迁移和 DeepSpeed checkpoint 接管暂不放入这个最小 Runtime。
 
 旧版 v1 checkpoint 不含 RNG state 和 gradient sync mode。使用默认 `auto` 恢复旧
 checkpoint 时，Runtime 会保留旧版的每 micro-batch 同步语义，并标记
@@ -336,4 +426,6 @@ checkpoint 时，Runtime 会保留旧版的每 micro-batch 同步语义，并标
 GitHub Actions 会安装 CPU 版 PyTorch wheel，并运行 tiny GPT forward/backward
 测试、单进程训练 smoke test、checkpoint/resume、确定性 synthetic data、两进程
 Gloo collective test、dropout 下的 exact checkpoint verify、Markdown 报告渲染和
-`ruff check .`。NCCL 和 GPU 相关 FSDP 性能实验保留为本地 Docker benchmark。
+`ruff check .`。本轮还覆盖 CPU PyTorch Profiler smoke、独立 repeat 语义和
+DeepSpeed ZeRO config builder；NCCL、DeepSpeed GPU 和 FSDP 性能实验保留为本地
+Docker benchmark。

@@ -15,6 +15,9 @@ test = [
   "pytest>=8.0,<9",
   "ruff>=0.5,<1",
 ]
+deepspeed = [
+  "deepspeed==0.19.4",
+]
 
 [tool.ruff]
 line-length = 100

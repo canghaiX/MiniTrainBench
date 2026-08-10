@@ -11,3 +11,4 @@ results/*features_smoke.json
 .runtime*_smoke*/
 results/runtime_determinism/*
 !results/runtime_determinism/verification.json
+results/**/rank_*.trace.json

@@ -64,9 +64,11 @@ class CheckpointManager:
                 f"- RNG 状态版本：{metadata.get('rng_state_version', '无（旧 checkpoint）')}",
                 f"- 生成时间：{metadata['created_at']}",
                 "",
-                "只有同 strategy、同 precision、同 world size、同模型配置和同关键训练参数的"
-                "任务可以恢复这个 checkpoint。带有每 rank RNG 状态的 v2 checkpoint "
-                "可以精确恢复随机训练路径。",
+                (
+                    "只有同 strategy、同 precision、同 world size、同模型配置和同关键训练参数的"
+                    "任务可以恢复这个 checkpoint。带有每 rank RNG 状态的 v2 checkpoint "
+                    "可以精确恢复随机训练路径。"
+                ),
             ]
         ) + "\n"
 
@@ -235,7 +237,7 @@ class CheckpointManager:
             return None, False, "checkpoint_missing_rng_state"
         loaded = torch.load(path, map_location="cpu", weights_only=True)
         if not isinstance(loaded, dict) or not isinstance(loaded.get("cpu"), torch.Tensor):
-            raise ValueError(f"checkpoint RNG 状态格式无效：{path}")
+            raise TypeError(f"checkpoint RNG 状态格式无效：{path}")
         rng_state = {
             name: value
             for name, value in loaded.items()

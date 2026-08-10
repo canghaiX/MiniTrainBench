@@ -13,20 +13,20 @@
 | fsdp | 4 | bf16 | 0.07 | 35.71 | 1.15 | 56058.97 | 36.53 | 208.09 | 90.01% | 66.17% | 16.22 | 1 |
 | fsdp | 8 | bf16 | 0.06 | 32.29 | 0.92 | 124391.38 | 32.93 | 175.55 | 99.86% | 73.31% | 14.80 | 1 |
 
-扩展效率以同一策略的 1 卡吞吐为基准归一化。FSDP 显存节省和 step 差值均与相同 GPU 数下的 DDP 对比计算。
+扩展效率以同一策略的 1 卡吞吐为基准归一化。非 DDP 策略的显存节省和 step 差值均与相同 GPU 数下的 DDP 对比计算。
 
 ### Runtime 状态
 
-| 策略 | GPU 数 | Strategy impl | 是否恢复 | Global step | Tokens seen | 请求同步 | 实际同步 | 同步 micro-batch/step | 精确恢复 | Latest | Keep last | Ready 数 | Resume path | Last checkpoint |
-| --- | ---: | --- | --- | ---: | ---: | --- | --- | ---: | --- | --- | ---: | ---: | --- | --- |
-| ddp | 1 | DDPStrategy | 否 | 7 | 3584 | - | - | - | - | - | 3 | 0 | - | - |
-| ddp | 2 | DDPStrategy | 否 | 7 | 7168 | - | - | - | - | - | 3 | 0 | - | - |
-| ddp | 4 | DDPStrategy | 否 | 7 | 14336 | - | - | - | - | - | 3 | 0 | - | - |
-| ddp | 8 | DDPStrategy | 否 | 7 | 28672 | - | - | - | - | - | 3 | 0 | - | - |
-| fsdp | 1 | FSDPStrategy | 否 | 7 | 3584 | - | - | - | - | - | 3 | 0 | - | - |
-| fsdp | 2 | FSDPStrategy | 否 | 7 | 7168 | - | - | - | - | - | 3 | 0 | - | - |
-| fsdp | 4 | FSDPStrategy | 否 | 7 | 14336 | - | - | - | - | - | 3 | 0 | - | - |
-| fsdp | 8 | FSDPStrategy | 否 | 7 | 28672 | - | - | - | - | - | 3 | 0 | - | - |
+| 策略 | GPU 数 | Strategy impl | 是否恢复 | Global step | Tokens seen | Trial protocol | 请求同步 | 实际同步 | 同步 micro-batch/step | 精确恢复 | Latest | Keep last | Ready 数 | Resume path | Last checkpoint |
+| --- | ---: | --- | --- | ---: | ---: | --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | --- |
+| ddp | 1 | DDPStrategy | 否 | 7 | 3584 | - | - | - | - | - | - | 3 | 0 | - | - |
+| ddp | 2 | DDPStrategy | 否 | 7 | 7168 | - | - | - | - | - | - | 3 | 0 | - | - |
+| ddp | 4 | DDPStrategy | 否 | 7 | 14336 | - | - | - | - | - | - | 3 | 0 | - | - |
+| ddp | 8 | DDPStrategy | 否 | 7 | 28672 | - | - | - | - | - | - | 3 | 0 | - | - |
+| fsdp | 1 | FSDPStrategy | 否 | 7 | 3584 | - | - | - | - | - | - | 3 | 0 | - | - |
+| fsdp | 2 | FSDPStrategy | 否 | 7 | 7168 | - | - | - | - | - | - | 3 | 0 | - | - |
+| fsdp | 4 | FSDPStrategy | 否 | 7 | 14336 | - | - | - | - | - | - | 3 | 0 | - | - |
+| fsdp | 8 | FSDPStrategy | 否 | 7 | 28672 | - | - | - | - | - | - | 3 | 0 | - | - |
 
 ### 通信
 

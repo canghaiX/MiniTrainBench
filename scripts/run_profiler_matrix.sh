@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE="${IMAGE:-minitrainbench:gpu}"
+NPROC="${NPROC:-2}"
+OUT_DIR="${OUT_DIR:-results/profiler}"
+PROFILE_WAIT="${PROFILE_WAIT:-1}"
+PROFILE_WARMUP="${PROFILE_WARMUP:-1}"
+PROFILE_ACTIVE="${PROFILE_ACTIVE:-3}"
+RECORD_SHAPES="${RECORD_SHAPES:-0}"
+WITH_STACK="${WITH_STACK:-0}"
+
+BATCH_SIZE="${BATCH_SIZE:-1}"
+SEQ_LENGTH="${SEQ_LENGTH:-256}"
+VOCAB_SIZE="${VOCAB_SIZE:-8192}"
+D_MODEL="${D_MODEL:-512}"
+N_HEADS="${N_HEADS:-8}"
+N_LAYERS="${N_LAYERS:-6}"
+
+mkdir -p "${OUT_DIR}"
+
+docker_run() {
+  docker run --rm --gpus all --ipc=host --network=host \
+    -v "${PWD}:/workspace" -w /workspace "${IMAGE}" "$@"
+}
+
+run_profile() {
+  local strategy="$1"
+  local trace_dir="${OUT_DIR}/${strategy}_${NPROC}gpu"
+  docker_run torchrun --standalone --nproc_per_node="${NPROC}" -m minitrainbench profile \
+    --strategy "${strategy}" \
+    --precision bf16 \
+    --batch-size "${BATCH_SIZE}" \
+    --seq-length "${SEQ_LENGTH}" \
+    --vocab-size "${VOCAB_SIZE}" \
+    --d-model "${D_MODEL}" \
+    --n-heads "${N_HEADS}" \
+    --n-layers "${N_LAYERS}" \
+    --profile-wait "${PROFILE_WAIT}" \
+    --profile-warmup "${PROFILE_WARMUP}" \
+    --profile-active "${PROFILE_ACTIVE}" \
+    --trace-dir "/workspace/${trace_dir}" \
+    $(if [[ "${RECORD_SHAPES}" == "1" ]]; then echo --record-shapes; fi) \
+    $(if [[ "${WITH_STACK}" == "1" ]]; then echo --with-stack; fi)
+}
+
+run_profile ddp
+run_profile fsdp
+
+python3 - <<PY
+from pathlib import Path
+
+out_dir = Path("${OUT_DIR}")
+trace_dirs = [
+    out_dir / f"ddp_${NPROC}gpu",
+    out_dir / f"fsdp_${NPROC}gpu",
+]
+parts = ["# MiniTrainBench Profiler 汇总", ""]
+for trace_dir in trace_dirs:
+    summary = trace_dir / "profile_summary.md"
+    if summary.is_file():
+        parts.append(f"## {trace_dir.name}")
+        parts.append("")
+        parts.append(summary.read_text())
+        parts.append("")
+report = out_dir / "report.md"
+report.write_text("\n".join(parts))
+print(report)
+PY
+
+printf 'Profiler 汇总结果: %s\n' "${OUT_DIR}/report.md"

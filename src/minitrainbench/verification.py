@@ -12,7 +12,7 @@ import torch.distributed as dist
 from .checkpoint import CheckpointLoad, CheckpointManager
 from .distributed import DistributedContext, setup_distributed
 from .model import GPTConfig, MiniGPT
-from .runtime import TrainState, TrainingConfig, _write_json
+from .runtime import TrainingConfig, TrainState, _write_json
 from .strategy import create_strategy
 
 
@@ -159,7 +159,7 @@ def verify_checkpoints(args: Any) -> dict[str, Any] | None:
     )
     try:
         manager = CheckpointManager(root=None, context=context)
-        left_metadata, right_metadata = _validate_pair(
+        left_metadata, _right_metadata = _validate_pair(
             manager,
             args.left,
             args.right,

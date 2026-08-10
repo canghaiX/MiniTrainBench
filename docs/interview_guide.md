@@ -6,9 +6,9 @@
 ## 一分钟介绍
 
 MiniTrainBench 是一个 Docker 化的 PyTorch 分布式训练 benchmark 和最小训练 Runtime。
-它使用合成 token 驱动小型 GPT-like 模型，支持 DDP、FSDP、BF16、gradient
-accumulation、activation checkpointing、分布式 checkpoint/resume 和 NCCL collective
-microbenchmark。
+它使用合成 token 驱动小型 GPT-like 模型，支持 DDP、FSDP、DeepSpeed ZeRO、BF16、
+gradient accumulation、activation checkpointing、分布式 checkpoint/resume、
+PyTorch Profiler trace 和 NCCL collective microbenchmark。
 
 项目不仅比较吞吐和显存，还实现了 strategy 抽象、checkpoint 原子发布、retention、
 每 rank RNG 保存，以及连续训练与中断恢复之间的精确状态校验。当前已在 8x A100
@@ -25,6 +25,9 @@ Runtime 契约。
 | CheckpointManager | DCP、临时目录、READY、latest、retention | 防止半成品 checkpoint 被恢复 |
 | RNG checkpoint | 每 rank CPU/CUDA RNG state | dropout 等随机路径可精确恢复 |
 | `checkpoint verify` | 比较模型、optimizer、TrainState、RNG digest | 从“能恢复”升级到“可证明恢复正确” |
+| Repeat summary | 独立 trial、`mean/std/min/max` | 从单次数字升级到可信实验方法 |
+| Profiler | 每 rank Chrome trace、top ops、step breakdown | 展示性能定位思路 |
+| DeepSpeed adapter | ZeRO-2/ZeRO-3 benchmark、统一 JSON | 与业界训练栈横向对照 |
 | Report | 吞吐、step time、显存、扩展效率、Runtime 状态 | 让实验结论可读、可复现 |
 | CI | CPU PyTorch + Gloo smoke | 不依赖 GPU 也能守住核心契约 |
 
@@ -128,6 +131,42 @@ rank 限制。
 两进程 DDP gradient accumulation、checkpoint/resume、legacy checkpoint 降级、
 checkpoint verify、Gloo collective 和报告渲染。GPU 脚本保留为 Docker 证据链。
 
+### 9. repeat 不能只是同一训练状态上的连续窗口
+
+**问题**：如果 `repeat=3` 只是同一个模型和 optimizer 连续训练 3 个测量窗口，得到的
+方差会混入 loss 曲线、optimizer 状态和缓存变化，不是真正独立 trial。
+
+**解决**：`repeat > 1` 时每个 trial 重新初始化模型、optimizer、TrainState 和 synthetic
+iterator，并与 checkpoint/resume 参数互斥。报告用 `mean ± std` 展示主指标，JSON 保留
+每个 trial 的 raw metrics。
+
+**面试表述**：benchmark repeat 和训练恢复要拆开，这样性能统计和 Runtime 状态语义都更
+干净。
+
+### 10. Profiler 不应该污染主 benchmark
+
+**问题**：Profiler 会改变 kernel 调度、内存采样和 Python 开销。如果在 `train`
+benchmark 默认打开，会让 tokens/sec 失真。
+
+**解决**：新增 `minitrainbench profile` 独立入口，复用同一训练 step，但单独导出每 rank
+Chrome trace、top ops 和 step breakdown。主 benchmark 负责稳定数值，profile 负责解释
+为什么慢。
+
+**面试表述**：性能工程不能只报吞吐，还要能从 step breakdown 和 trace 中定位是 compute、
+optimizer 还是 collective 等待。
+
+### 11. DeepSpeed ZeRO 不直接塞进 `TrainingStrategy`
+
+**问题**：DeepSpeed Engine 会接管 backward、step、gradient accumulation 和 checkpoint。
+如果把它强行塞进 DDP/FSDP 的 `Trainer`，两套生命周期会混在一起。
+
+**解决**：新增独立 `deepspeed` 子命令，跑 ZeRO-2/ZeRO-3 benchmark 并归一化到现有 JSON
+schema。报告层可以横向比较 DDP/FSDP/ZeRO，核心 Runtime 仍保持 DDP/FSDP checkpoint
+正确性。
+
+**面试表述**：这是一个 adapter 边界取舍，不是“不会接入”；优先保持核心 Runtime 的状态
+语义清晰。
+
 ## 核心实测结果
 
 ### 8x A100 单节点短跑
@@ -219,12 +258,15 @@ CUDA 计时要同步；多 rank 用 max step time；至少 repeat 多次报告�
 - 能列出精确 resume 需要的状态，并说明本项目未实现 scheduler/scaler 的原因。
 - 能解释为什么 verify 要处理 `ShardedTensor`/`DTensor`。
 - 能说明 CPU/Gloo CI 覆盖什么、GPU 证据脚本覆盖什么。
+- 能解释为什么 repeat trial 要独立初始化，为什么 profiler 入口与 benchmark 分离。
+- 能解释 ZeRO-2、ZeRO-3 与 FSDP 的显存/通信对比，以及为什么 DeepSpeed adapter 独立。
 - 能诚实说明当前限制：小模型、synthetic data、单节点、无 TP/PP、无跨 world size
-  resharding、默认 benchmark repeat 较少。
+  resharding；仓库已有短跑基线，严谨性能结论需要跑 `run_a100_stability_matrix.sh`。
 
 ## 可直接用于简历或自我介绍的表述
 
-> 实现 Docker 化的最小 PyTorch 分布式训练 Runtime，支持 DDP/FSDP、NCCL collective、
-> BF16、activation checkpointing 和 1/2/4/8 卡 A100 benchmark；实现 strategy 抽象、
-> READY-based 分布式 checkpoint 发布、每 rank RNG 精确恢复和 checkpoint state verify，
-> 并通过 CPU/Gloo CI 覆盖 DDP accumulation、resume 与分布式通信 smoke。
+> 实现 Docker 化的最小 PyTorch 分布式训练 Runtime，支持 DDP/FSDP/DeepSpeed ZeRO、
+> NCCL collective、BF16、activation checkpointing 和 1/2/4/8 卡 A100 benchmark；
+> 实现 strategy 抽象、独立 repeat 统计、PyTorch Profiler trace、READY-based 分布式
+> checkpoint 发布、每 rank RNG 精确恢复和 checkpoint state verify，并通过 CPU/Gloo CI
+> 覆盖 DDP accumulation、resume、profiler smoke 与分布式通信 smoke。
