@@ -21,11 +21,11 @@ def _precision_dtype(precision: str, device: torch.device) -> torch.dtype:
         return torch.float32
     if precision == "bf16":
         if device.type != "cuda":
-            raise ValueError("BF16 benchmark mode requires CUDA")
+            raise ValueError("BF16 benchmark 模式需要 CUDA")
         if not torch.cuda.is_bf16_supported():
-            raise RuntimeError("This CUDA device does not report BF16 support")
+            raise RuntimeError("当前 CUDA 设备未报告 BF16 支持")
         return torch.bfloat16
-    raise ValueError(f"unsupported precision: {precision}")
+    raise ValueError(f"不支持的精度: {precision}")
 
 
 def _wrap_fsdp(model: nn.Module, context: DistributedContext, precision: str) -> nn.Module:
@@ -119,7 +119,7 @@ def train(args: Any) -> dict[str, Any] | None:
         elif args.strategy == "fsdp":
             model = _wrap_fsdp(model, context, args.precision)
         else:
-            raise ValueError(f"unsupported strategy: {args.strategy}")
+            raise ValueError(f"不支持的训练策略: {args.strategy}")
 
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
         model.train()

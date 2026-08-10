@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "minitrainbench"
 version = "0.1.0"
-description = "A compact benchmark for distributed GPT-like training with PyTorch DDP and FSDP."
+description = "用于 PyTorch DDP/FSDP 的小型分布式 GPT-like 训练 benchmark。"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []

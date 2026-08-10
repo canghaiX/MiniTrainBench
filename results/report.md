@@ -1,8 +1,8 @@
-## Generated Benchmark Results
+## 生成的 Benchmark 结果
 
-### Training
+### 训练
 
-| Strategy | GPUs | Precision | Tokens/sec | Step time (ms) | Max memory (MB) | Scaling efficiency | Memory saving vs DDP | Step delta vs DDP (ms) | Repeats |
+| 策略 | GPU 数 | 精度 | Tokens/sec | Step time (ms) | 最大显存 (MB) | 扩展效率 | 相对 DDP 显存节省 | 相对 DDP step 差值 (ms) | Repeats |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | ddp | 1 | bf16 | 30362.52 | 16.86 | 481.47 | 100.00% | - | - | 1 |
 | ddp | 2 | bf16 | 38857.41 | 26.35 | 567.13 | 63.99% | - | - | 1 |
@@ -11,11 +11,11 @@
 | fsdp | 2 | bf16 | 29016.16 | 35.29 | 274.86 | 93.73% | 51.54% | 8.94 | 1 |
 | fsdp | 4 | bf16 | 16230.08 | 126.19 | 209.60 | 26.21% | 65.93% | 102.22 | 1 |
 
-Scaling efficiency is normalized to each strategy's 1-GPU throughput. FSDP memory saving and step delta are computed against DDP at the same GPU count.
+扩展效率以同一策略的 1 卡吞吐为基准归一化。FSDP 显存节省和 step 差值均与相同 GPU 数下的 DDP 对比计算。
 
-### Communication
+### 通信
 
-| Operation | GPUs | Elements | Latency (ms) | Bandwidth (GB/s) | Status |
+| 操作 | GPU 数 | 元素数 | 延迟 (ms) | 带宽 (GB/s) | 状态 |
 | --- | ---: | ---: | ---: | ---: | --- |
 | all_reduce | 4 | 1024 | 0.054 | 0.076 | ok |
 | all_gather | 4 | 1024 | 0.135 | 0.122 | ok |
@@ -27,4 +27,4 @@ Scaling efficiency is normalized to each strategy's 1-GPU throughput. FSDP memor
 | all_gather | 4 | 16777216 | 6.092 | 44.062 | ok |
 | reduce_scatter | 4 | 16777216 | 1.818 | 147.652 | ok |
 
-Small collective sizes are latency-bound; larger tensors expose bandwidth limits. Compare these rows with training step time to estimate communication pressure.
+小规模 collective 更容易受延迟限制；较大 tensor 更能暴露带宽上限。可将这些结果与训练 step time 对比，用于估计通信压力。

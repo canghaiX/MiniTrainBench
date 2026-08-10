@@ -59,11 +59,12 @@ def render_report(paths: list[str]) -> str:
     }
 
     lines = [
-        "## Generated Benchmark Results",
+        "## 生成的 Benchmark 结果",
         "",
-        "### Training",
+        "### 训练",
         "",
-        "| Strategy | GPUs | Precision | Tokens/sec | Step time (ms) | Max memory (MB) | Scaling efficiency | Memory saving vs DDP | Step delta vs DDP (ms) | Repeats |",
+        "| 策略 | GPU 数 | 精度 | Tokens/sec | Step time (ms) | 最大显存 (MB) | "
+        "扩展效率 | 相对 DDP 显存节省 | 相对 DDP step 差值 (ms) | Repeats |",
         "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for item in sorted(training, key=lambda row: (row["strategy"], row["world_size"])):
@@ -95,12 +96,12 @@ def render_report(paths: list[str]) -> str:
     lines.extend(
         [
             "",
-            "Scaling efficiency is normalized to each strategy's 1-GPU throughput. "
-            "FSDP memory saving and step delta are computed against DDP at the same GPU count.",
+            "扩展效率以同一策略的 1 卡吞吐为基准归一化。"
+            "FSDP 显存节省和 step 差值均与相同 GPU 数下的 DDP 对比计算。",
             "",
-            "### Communication",
+            "### 通信",
             "",
-            "| Operation | GPUs | Elements | Latency (ms) | Bandwidth (GB/s) | Status |",
+            "| 操作 | GPU 数 | 元素数 | 延迟 (ms) | 带宽 (GB/s) | 状态 |",
             "| --- | ---: | ---: | ---: | ---: | --- |",
         ]
     )
@@ -115,8 +116,8 @@ def render_report(paths: list[str]) -> str:
         lines.extend(
             [
                 "",
-                "Small collective sizes are latency-bound; larger tensors expose bandwidth limits. "
-                "Compare these rows with training step time to estimate communication pressure.",
+                "小规模 collective 更容易受延迟限制；较大 tensor 更能暴露带宽上限。"
+                "可将这些结果与训练 step time 对比，用于估计通信压力。",
             ]
         )
     return "\n".join(lines) + "\n"

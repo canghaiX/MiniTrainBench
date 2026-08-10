@@ -38,14 +38,14 @@ def _run_operation(
             chunks = list(tensor.chunk(world_size))
             dist.reduce_scatter(output, chunks)
     else:
-        raise ValueError(f"unsupported communication operation: {operation}")
+        raise ValueError(f"不支持的通信操作: {operation}")
 
 
 def communication_benchmark(args: Any) -> dict[str, Any] | None:
     context = setup_distributed(args.backend, args.device)
     try:
         if context.world_size < 2:
-            raise ValueError("communication benchmark requires at least 2 processes")
+            raise ValueError("通信 benchmark 至少需要 2 个进程")
         sizes = [int(item) for item in args.sizes.split(",") if item.strip()]
         results: list[dict[str, Any]] = []
         operations = ["all_reduce", "all_gather", "reduce_scatter"]

@@ -18,7 +18,7 @@ class GPTConfig:
 
 
 class TransformerBlock(nn.Module):
-    """Pre-norm causal Transformer block used as the FSDP wrapping unit."""
+    """Pre-norm causal Transformer block，用作 FSDP 自动包装单元。"""
 
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
@@ -64,8 +64,8 @@ class MiniGPT(nn.Module):
         _, sequence_length = input_ids.shape
         if sequence_length > self.config.seq_length:
             raise ValueError(
-                f"sequence length {sequence_length} exceeds configured "
-                f"max {self.config.seq_length}"
+                f"sequence length {sequence_length} 超过配置上限 "
+                f"{self.config.seq_length}"
             )
         positions = torch.arange(sequence_length, device=input_ids.device)
         hidden_states = self.token_embedding(input_ids) + self.position_embedding(positions)

@@ -1,27 +1,25 @@
 # MiniTrainBench
 
-MiniTrainBench is a small, reproducible benchmark for distributed GPT-like
-training with PyTorch DDP and FSDP. It uses synthetic token data, so runs do
-not depend on a dataset download.
+MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark，
+用于对比 PyTorch DDP 和 FSDP。项目使用合成 token 数据，因此不依赖数据集下载。
 
-## What this demonstrates for training infrastructure
+## 面向训练基础设施的能力展示
 
-- PyTorch distributed launch patterns with DDP, FSDP, NCCL, and Gloo.
-- Practical tradeoff analysis between DDP throughput and FSDP memory sharding.
-- Communication microbenchmarks for all-reduce, all-gather, and reduce-scatter.
-- Reproducible GPU runs through Docker and non-GPU smoke coverage in CI.
-- Report generation with scaling efficiency, memory saving, and repeat statistics.
+- 使用 DDP、FSDP、NCCL 和 Gloo 的 PyTorch distributed 启动与运行方式。
+- 分析 DDP 吞吐优势与 FSDP 显存分片之间的实际取舍。
+- 覆盖 all-reduce、all-gather、reduce-scatter 的通信 microbenchmark。
+- 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
+- 自动生成包含扩展效率、显存节省和 repeat 统计的 Markdown 报告。
 
-Resume-friendly summary:
+简历描述示例：
 
-> Built a Dockerized distributed LLM training benchmark that compares PyTorch
-> DDP/FSDP throughput, step time, memory, and NCCL collective behavior across
-> 1/2/4 GPUs, with CPU CI smoke tests and reproducible Markdown reports.
+> 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP 在
+> 1/2/4 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
+> smoke test 与可复现 Markdown 报告。
 
-## Environment
+## 环境
 
-The project does not install PyTorch into the host Python environment. Build
-the GPU image with Docker:
+项目不会把 PyTorch 安装到宿主机 Python 环境中。请使用 Docker 构建 GPU 镜像：
 
 ```bash
 docker build -t minitrainbench:gpu .
@@ -30,8 +28,8 @@ docker run --rm --gpus all --ipc=host --network=host \
   python -m pytest
 ```
 
-The default image is `pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime`.
-Override it when using an internal mirror:
+默认基础镜像是 `pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime`。
+如果需要使用内网镜像，可以覆盖 `BASE_IMAGE`：
 
 ```bash
 docker build \
@@ -39,28 +37,26 @@ docker build \
   -t minitrainbench:gpu .
 ```
 
-For CPU development and CI, install `requirements-cpu.txt` and then the
-editable project:
+CPU 开发和 CI 使用 `requirements-cpu.txt`，然后以 editable 模式安装项目：
 
 ```bash
 python -m pip install -r requirements-cpu.txt
 python -m pip install -e .
 ```
 
-## Reproduction
+## 复现
 
-Run the full A100 matrix:
+运行完整 A100 实验矩阵：
 
 ```bash
 IMAGE=minitrainbench:gpu REPEAT=1 scripts/run_a100_matrix.sh
 ```
 
-The script runs 1/2/4 GPU DDP, 1/2/4 GPU FSDP, 4-GPU NCCL collectives, and
-then regenerates `results/report.md`. Override `GPUS`, `STEPS`,
-`WARMUP_STEPS`, `REPEAT`, `OUT_DIR`, or model size environment variables when
-you need a longer run.
+脚本会顺序运行 1/2/4 卡 DDP、1/2/4 卡 FSDP、4 卡 NCCL collective，
+并重新生成 `results/report.md`。如需更长实验，可以通过 `GPUS`、`STEPS`、
+`WARMUP_STEPS`、`REPEAT`、`OUT_DIR` 或模型规模相关环境变量覆盖默认配置。
 
-Run one short DDP benchmark per GPU count:
+按 GPU 数运行短版 DDP benchmark：
 
 ```bash
 mkdir -p results
@@ -75,7 +71,7 @@ for n in 1 2 4; do
 done
 ```
 
-Run the matching FSDP benchmark:
+运行同口径 FSDP benchmark：
 
 ```bash
 for n in 1 2 4; do
@@ -89,7 +85,7 @@ for n in 1 2 4; do
 done
 ```
 
-Run NCCL collectives:
+运行 NCCL collective benchmark：
 
 ```bash
 docker run --rm --gpus all --ipc=host --network=host \
@@ -100,7 +96,7 @@ docker run --rm --gpus all --ipc=host --network=host \
   --output results/nccl_4gpu.json
 ```
 
-Exercise BF16 with activation checkpointing and gradient accumulation:
+验证 BF16、activation checkpointing 和 gradient accumulation 组合：
 
 ```bash
 docker run --rm --gpus all --ipc=host --network=host \
@@ -113,7 +109,7 @@ docker run --rm --gpus all --ipc=host --network=host \
   --output results/fsdp_checkpoint_accum_2gpu.json
 ```
 
-Generate a Markdown report from saved results:
+从保存的 JSON 结果生成 Markdown 报告：
 
 ```bash
 docker run --rm -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
@@ -125,15 +121,14 @@ docker run --rm -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
   --output results/report.md
 ```
 
-## Experiment Table
+## 实验表格
 
-The table below was generated on this host with 8x NVIDIA A100-SXM4-40GB
-available, using Docker image `minitrainbench:gpu` built from the local
-PyTorch 2.10.0 + CUDA 13.0 image. Each row uses a 23.2M-parameter GPT-like
-model, BF16, synthetic tokens, per-rank batch size 2, sequence length 256,
-2 warmup steps, and 5 measured steps.
+下表在当前主机生成，机器可用 8x NVIDIA A100-SXM4-40GB。实验使用本地
+PyTorch 2.10.0 + CUDA 13.0 镜像构建的 `minitrainbench:gpu`。每行使用
+23.2M 参数 GPT-like 模型、BF16、合成 token、单 rank batch size 2、
+sequence length 256、2 个 warmup step 和 5 个测量 step。
 
-| Strategy | GPUs | Precision | Tokens/sec | Step time (ms) | Max memory (MB) | Scaling efficiency | Memory saving vs DDP | Step delta vs DDP (ms) | Repeats |
+| 策略 | GPU 数 | 精度 | Tokens/sec | Step time (ms) | 最大显存 (MB) | 扩展效率 | 相对 DDP 显存节省 | 相对 DDP step 差值 (ms) | Repeats |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | ddp | 1 | bf16 | 30362.52 | 16.86 | 481.47 | 100.00% | - | - | 1 |
 | ddp | 2 | bf16 | 38857.41 | 26.35 | 567.13 | 63.99% | - | - | 1 |
@@ -142,9 +137,9 @@ model, BF16, synthetic tokens, per-rank batch size 2, sequence length 256,
 | fsdp | 2 | bf16 | 29016.16 | 35.29 | 274.86 | 93.73% | 51.54% | 8.94 | 1 |
 | fsdp | 4 | bf16 | 16230.08 | 126.19 | 209.60 | 26.21% | 65.93% | 102.22 | 1 |
 
-4-GPU NCCL collective results:
+4 卡 NCCL collective 结果：
 
-| Operation | Elements | Latency (ms) | Bandwidth (GB/s) |
+| 操作 | 元素数 | 延迟 (ms) | 带宽 (GB/s) |
 | --- | ---: | ---: | ---: |
 | all_reduce | 1024 | 0.054 | 0.076 |
 | all_gather | 1024 | 0.135 | 0.122 |
@@ -156,31 +151,27 @@ model, BF16, synthetic tokens, per-rank batch size 2, sequence length 256,
 | all_gather | 16777216 | 6.092 | 44.062 |
 | reduce_scatter | 16777216 | 1.818 | 147.652 |
 
-## Bottleneck Analysis
+## 瓶颈分析
 
-DDP keeps a full copy of model parameters, gradients, and optimizer state on
-each rank. Its main distributed cost is gradient all-reduce, so memory rises
-slightly from 481 MB to 615 MB across the 1/2/4 GPU runs while throughput
-scales from 30.4k to 85.5k tokens/sec. The 2-GPU row is limited by the extra
-synchronization relative to this small model size.
+DDP 会在每个 rank 上保留完整的模型参数、梯度和优化器状态。它的主要分布式
+开销来自梯度 all-reduce，因此在 1/2/4 卡实验中，显存从 481 MB 小幅上升到
+615 MB，同时吞吐从 30.4k tokens/sec 扩展到 85.5k tokens/sec。由于当前模型
+较小，2 卡结果受到额外同步开销影响，扩展效率不高。
 
-FSDP shards parameters, gradients, and optimizer state. This lowers the
-steady-state memory footprint, but introduces parameter all-gather and
-gradient reduce-scatter traffic around wrapped Transformer blocks. In this
-short run, FSDP reduces max memory from 479.8 MB on 1 GPU to 209.6 MB on
-4 GPUs, but 4-GPU step time grows to 126.2 ms because the model is too small
-to amortize per-block all-gather and reduce-scatter overhead. FSDP is therefore
-best interpreted here as a memory-scaling path, not a small-model throughput
-win.
+FSDP 会分片参数、梯度和优化器状态，因此可以降低稳定状态下的显存占用；代价是
+在包裹的 Transformer block 周围引入参数 all-gather 和梯度 reduce-scatter
+通信。在这组短跑中，FSDP 将最大显存从 1 卡的 479.8 MB 降到 4 卡的
+209.6 MB，但 4 卡 step time 增长到 126.2 ms，因为模型太小，无法摊平
+每个 block 上 all-gather 和 reduce-scatter 的额外开销。因此这里更适合把
+FSDP 理解为显存扩展路径，而不是小模型吞吐优化路径。
 
-Use the communication JSON to relate collective latency and bandwidth to the
-training step. Compare runs with the same model, precision, local batch,
-sequence length, warmup, and number of measured steps. Activation checkpointing
-trades extra recompute for lower activation memory; gradient accumulation
-trades fewer optimizer steps for more work between synchronization points.
+可以结合通信 JSON 分析 collective 延迟、带宽和训练 step time 的关系。比较结果时
+应保持模型、精度、local batch、sequence length、warmup 和测量 step 数一致。
+activation checkpointing 通过额外重计算换取更低 activation 显存；gradient
+accumulation 则通过在同步点之间累积更多计算，减少优化器更新频率。
 
 ## CPU CI
 
-GitHub Actions installs the CPU PyTorch wheel and runs a tiny GPT forward/backward
-test, a single-process training smoke test, and a two-process Gloo collective
-test. NCCL and GPU-specific FSDP performance runs remain local Docker benchmarks.
+GitHub Actions 会安装 CPU 版 PyTorch wheel，并运行 tiny GPT forward/backward
+测试、单进程训练 smoke test 和两进程 Gloo collective test。NCCL 和 GPU 相关
+FSDP 性能实验保留为本地 Docker benchmark。

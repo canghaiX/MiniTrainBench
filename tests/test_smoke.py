@@ -188,8 +188,8 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
 
     report = render_report(paths)
 
-    assert "Scaling efficiency" in report
+    assert "扩展效率" in report
     assert "75.00%" in report
     assert "50.00%" in report
     assert "4.00" in report
-    assert "Small collective sizes are latency-bound" in report
+    assert "小规模 collective 更容易受延迟限制" in report

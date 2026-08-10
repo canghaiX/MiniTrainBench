@@ -1,4 +1,4 @@
-name: CPU smoke test
+name: CPU 冒烟测试
 
 on:
   push:
@@ -13,12 +13,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-      - name: Install CPU dependencies
+      - name: 安装 CPU 依赖
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-cpu.txt
           python -m pip install -e .
-      - name: Lint
+      - name: 代码静态检查
         run: ruff check .
-      - name: Run CPU/Gloo smoke tests
+      - name: 运行 CPU/Gloo 冒烟测试
         run: python -m pytest

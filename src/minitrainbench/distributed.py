@@ -45,7 +45,7 @@ def setup_distributed(
         device_name == "auto" and torch.cuda.is_available()
     )
     if requested_cuda and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
+        raise RuntimeError("已请求 CUDA，但 torch.cuda.is_available() 返回 false")
 
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     rank = int(os.environ.get("RANK", "0"))
