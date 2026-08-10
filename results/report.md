@@ -30,16 +30,16 @@
 
 ### 通信
 
-| 操作 | GPU 数 | 元素数 | 延迟 (ms) | 带宽 (GB/s) | 状态 |
-| --- | ---: | ---: | ---: | ---: | --- |
-| all_reduce | 8 | 1024 | 0.052 | 0.080 | ok |
-| all_gather | 8 | 1024 | 0.185 | 0.177 | ok |
-| reduce_scatter | 8 | 1024 | 0.059 | 0.560 | ok |
-| all_reduce | 8 | 1048576 | 0.117 | 35.822 | ok |
-| all_gather | 8 | 1048576 | 0.347 | 96.739 | ok |
-| reduce_scatter | 8 | 1048576 | 0.245 | 137.122 | ok |
-| all_reduce | 8 | 16777216 | 0.724 | 92.734 | ok |
-| all_gather | 8 | 16777216 | 3.349 | 160.314 | ok |
-| reduce_scatter | 8 | 16777216 | 2.223 | 241.493 | ok |
+| 操作 | GPU 数 | Split | 元素数 | 延迟 (ms) | 带宽 (GB/s) | 状态 |
+| --- | ---: | --- | ---: | ---: | ---: | --- |
+| all_reduce | 8 | - | 1024 | 0.052 | 0.080 | ok |
+| all_gather | 8 | - | 1024 | 0.185 | 0.177 | ok |
+| reduce_scatter | 8 | - | 1024 | 0.059 | 0.560 | ok |
+| all_reduce | 8 | - | 1048576 | 0.117 | 35.822 | ok |
+| all_gather | 8 | - | 1048576 | 0.347 | 96.739 | ok |
+| reduce_scatter | 8 | - | 1048576 | 0.245 | 137.122 | ok |
+| all_reduce | 8 | - | 16777216 | 0.724 | 92.734 | ok |
+| all_gather | 8 | - | 16777216 | 3.349 | 160.314 | ok |
+| reduce_scatter | 8 | - | 16777216 | 2.223 | 241.493 | ok |
 
-小规模 collective 更容易受延迟限制；较大 tensor 更能暴露带宽上限。可将这些结果与训练 step time 对比，用于估计通信压力。
+小规模 collective 更容易受延迟限制；较大 tensor 更能暴露带宽上限。all-to-all 对应 MoE expert parallel 的 token dispatch/combine，可将这些结果与训练 step time 对比，用于估计稀疏模型通信压力。

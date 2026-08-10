@@ -6,6 +6,7 @@ from .communication import communication_benchmark
 from .deepspeed_benchmark import deepspeed_benchmark
 from .profiler import profile_training
 from .report import write_report
+from .tensor_parallel import tensor_parallel_check
 from .training import train
 from .verification import verify_checkpoints
 
@@ -105,9 +106,38 @@ def build_parser() -> argparse.ArgumentParser:
     comm_parser = subparsers.add_parser("comm", help="运行 collective 通信 benchmark")
     _add_common_distributed_arguments(comm_parser)
     comm_parser.add_argument("--sizes", default="1024,1048576,16777216")
+    comm_parser.add_argument(
+        "--operations",
+        default="all_reduce,all_gather,reduce_scatter,all_to_all",
+        help="逗号分隔的 collective 列表",
+    )
+    comm_parser.add_argument(
+        "--all-to-all-mode",
+        choices=["equal", "uneven", "both"],
+        default="both",
+        help="all-to-all 的 split 模式",
+    )
     comm_parser.add_argument("--warmup", type=int, default=10)
     comm_parser.add_argument("--iters", type=int, default=50)
     comm_parser.add_argument("--output", default=None)
+
+    tp_parser = subparsers.add_parser(
+        "tp",
+        help="运行 toy tensor parallel 正确性检查",
+    )
+    tp_subparsers = tp_parser.add_subparsers(dest="tp_command", required=True)
+    tp_check_parser = tp_subparsers.add_parser(
+        "check",
+        help="比较 Column/Row Parallel Linear 与单卡 reference 是否一致",
+    )
+    _add_common_distributed_arguments(tp_check_parser)
+    tp_check_parser.add_argument("--batch-size", type=int, default=2)
+    tp_check_parser.add_argument("--seq-length", type=int, default=8)
+    tp_check_parser.add_argument("--in-features", type=int, default=16)
+    tp_check_parser.add_argument("--out-features", type=int, default=32)
+    tp_check_parser.add_argument("--seed", type=int, default=2026)
+    tp_check_parser.add_argument("--atol", type=float, default=1e-5)
+    tp_check_parser.add_argument("--output", default=None)
 
     report_parser = subparsers.add_parser("report", help="将 JSON benchmark 结果渲染为 Markdown")
     report_parser.add_argument("--input", nargs="+", required=True)
@@ -177,7 +207,28 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "comm":
         if args.iters < 1 or args.warmup < 0:
             raise SystemExit("iters 必须为正数，warmup 不能为负数")
-        communication_benchmark(args)
+        try:
+            communication_benchmark(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+    elif args.command == "tp" and args.tp_command == "check":
+        if (
+            args.batch_size < 1
+            or args.seq_length < 1
+            or args.in_features < 1
+            or args.out_features < 1
+            or args.atol <= 0
+        ):
+            raise SystemExit(
+                "batch-size、seq-length、in-features 和 out-features 必须为正数；"
+                "atol 必须大于 0"
+            )
+        try:
+            result = tensor_parallel_check(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+        if result is not None and result["status"] != "ok":
+            raise SystemExit("tensor parallel 正确性检查失败，详见输出 JSON")
     elif args.command == "report":
         print(write_report(args.input, args.output), end="")
     elif args.command == "checkpoint" and args.checkpoint_command == "verify":

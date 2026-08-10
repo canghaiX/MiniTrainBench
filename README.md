@@ -4,12 +4,14 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 用于对比 PyTorch DDP 和 FSDP。项目使用合成 token 数据，因此不依赖数据集下载。
 
 面试复盘和训练 Infra 高频问题见 [项目复盘与面试指南](docs/interview_guide.md)。
+MoE/expert parallel 通信笔记见 [MoE 训练笔记](docs/moe_training_notes.md)，
+Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md)。
 
 ## 面向训练基础设施的能力展示
 
 - 使用 DDP、FSDP、DeepSpeed ZeRO、NCCL 和 Gloo 的分布式训练启动与运行方式。
 - 分析 DDP 吞吐优势、FSDP 显存分片和 ZeRO optimizer/parameter sharding 之间的实际取舍。
-- 覆盖 all-reduce、all-gather、reduce-scatter 的通信 microbenchmark。
+- 覆盖 all-reduce、all-gather、reduce-scatter、all-to-all 的通信 microbenchmark。
 - 实现最小训练 Runtime：`TrainingConfig`、`TrainState`、`StepMetrics`、`Trainer`、
   deterministic synthetic data、distributed checkpoint/resume。
 - 使用可插拔 strategy 抽象隔离 DDP/FSDP 包装逻辑，并支持 checkpoint retention。
@@ -17,15 +19,18 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 - 保存每个 rank 的 RNG 状态，支持带 dropout 的精确 checkpoint/resume 校验。
 - 支持独立 repeat trial，报告 `mean ± std`，避免单次短跑被当成严谨性能结论。
 - 支持 PyTorch Profiler，导出每 rank Chrome trace 与 rank 0 Markdown 摘要。
+- 提供 toy tensor parallel correctness check，验证 Column/Row Parallel Linear
+  与单卡 reference 的 forward/backward 一致性。
 - 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
 - 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
 简历描述示例：
 
 > 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP/DeepSpeed
-> ZeRO 在 1/2/4/8 卡下的吞吐、step time、显存和 NCCL collective 行为，并提供 CPU CI
-> smoke test、Profiler trace、可插拔训练策略、精确分布式 checkpoint/resume 和可复现
-> Markdown 报告。
+> ZeRO 在 1/2/4/8 卡下的吞吐、step time、显存和 NCCL collective 行为，补充
+> all-to-all MoE 通信 benchmark、toy tensor parallel correctness check、CPU CI
+> smoke test、Profiler trace、可插拔训练策略、精确分布式 checkpoint/resume 和
+> 可复现 Markdown 报告。
 
 ## 训练框架能力点
 
@@ -48,6 +53,10 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
   collective 线索，便于从吞吐数字追到具体性能瓶颈。
 - DeepSpeed ZeRO 作为独立 adapter 接入 `minitrainbench deepspeed`，不接管现有
   DCP checkpoint/resume，避免两套 engine 生命周期混在一起。
+- `minitrainbench comm --operations all_to_all` 用 equal/uneven split 模拟 MoE
+  expert parallel 的 token dispatch/combine 通信路径。
+- `minitrainbench tp check` 用 toy Column/Row Parallel Linear 展示 Megatron-style
+  tensor parallel 的切分语义，不把 TP/PP/SP 强行并入当前 Runtime。
 
 ## 环境
 
@@ -151,6 +160,38 @@ docker run --rm --gpus all --ipc=host --network=host \
   --device cuda --backend nccl \
   --sizes 1024,1048576,16777216 --warmup 10 --iters 50 \
   --output results/nccl_8gpu.json
+```
+
+运行 MoE expert parallel 风格的 all-to-all benchmark：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_moe_comm_matrix.sh
+```
+
+脚本默认跑 2/4/8 卡，并分别测试 equal/uneven split。单独运行某个规模时：
+
+```bash
+docker run --rm --gpus all --ipc=host --network=host \
+  -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
+  torchrun --standalone --nproc_per_node=2 -m minitrainbench comm \
+  --device cuda --backend nccl \
+  --operations all_to_all --all-to-all-mode both \
+  --sizes 1024,1048576 --warmup 10 --iters 50 \
+  --output results/all_to_all_2gpu.json
+```
+
+运行 toy tensor parallel correctness check：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_tensor_parallel_smoke.sh
+```
+
+CPU/Gloo 也可以验证相同的切分语义：
+
+```bash
+torchrun --standalone --nproc_per_node=2 -m minitrainbench tp check \
+  --device cpu --backend gloo --batch-size 1 --seq-length 2 \
+  --in-features 8 --out-features 8 --output results/tp_check_cpu.json
 ```
 
 验证 BF16、activation checkpointing 和 gradient accumulation 组合：
@@ -327,6 +368,20 @@ sequence length 256、2 个 warmup step 和 5 个测量 step。
 和“2 step 保存 + resume 1 step”的 `checkpoint verify` 结果为 `exact_match=true`：
 模型、optimizer、TrainState 和每 rank RNG state digest 均一致。
 
+## MoE 通信路径与 Megatron-style 并行
+
+MoE expert parallel 的核心通信是 token dispatch/combine。每个 rank 持有部分 expert，
+router 选择 top-k expert 后，token 需要按目标 expert 所在 rank 重新打包并通过
+all-to-all 发送。`equal` split 可以观察理想均衡下的带宽，`uneven` split 更接近真实
+router 产生的负载不均，也更容易暴露 straggler 和 buffer shape 压力。设计细节见
+[MoE 训练笔记](docs/moe_training_notes.md)。
+
+Tensor Parallel 解决的是单层矩阵乘法如何跨 rank 切分。`ColumnParallelLinear` 按输出维
+切权重，`RowParallelLinear` 按输入维切权重并在 partial output 上做 all-reduce。
+`minitrainbench tp check` 不追求完整 Megatron 训练，而是用小矩阵验证 forward/backward
+与单卡 reference 一致，作为 TP/PP/SP 面试讨论的代码证据。更多笔记见
+[并行训练笔记](docs/parallelism_notes.md)。
+
 ## 性能定位证据
 
 `minitrainbench profile` 用 PyTorch Profiler 在每个 rank 采集 trace。报告中的
@@ -368,6 +423,11 @@ FSDP 会分片参数、梯度和优化器状态，因此可以降低稳定状态
 16M 元素时 all-reduce、all-gather、reduce-scatter 分别达到 92.7、160.3、241.5
 GB/s。FSDP 的 all-gather/reduce-scatter 在大 tensor 下有较高带宽，但每个 block
 重复触发 collective，仍会给小模型带来可见的调度和同步开销。
+
+MoE 的 all-to-all 不能只看平均带宽。equal split 主要反映均衡 token dispatch 的链路
+能力；uneven split 还会受到 token 数量不均、不同 rank 的 buffer 大小和最慢 rank 的
+影响。实际 MoE runtime 需要同时观察 router load balance、capacity overflow 和
+all-to-all latency，不能用 all-reduce 的结果直接替代。
 
 可以结合通信 JSON 分析 collective 延迟、带宽和训练 step time 的关系。比较结果时
 应保持模型、精度、local batch、sequence length、warmup 和测量 step 数一致。
@@ -426,6 +486,7 @@ checkpoint 时，Runtime 会保留旧版的每 micro-batch 同步语义，并标
 GitHub Actions 会安装 CPU 版 PyTorch wheel，并运行 tiny GPT forward/backward
 测试、单进程训练 smoke test、checkpoint/resume、确定性 synthetic data、两进程
 Gloo collective test、dropout 下的 exact checkpoint verify、Markdown 报告渲染和
-`ruff check .`。本轮还覆盖 CPU PyTorch Profiler smoke、独立 repeat 语义和
-DeepSpeed ZeRO config builder；NCCL、DeepSpeed GPU 和 FSDP 性能实验保留为本地
+`ruff check .`。本轮还覆盖 CPU PyTorch Profiler smoke、独立 repeat 语义、
+DeepSpeed ZeRO config builder、all-to-all graceful skip 和 toy tensor parallel
+correctness；NCCL、DeepSpeed GPU、MoE all-to-all 和 FSDP 性能实验保留为本地
 Docker benchmark。

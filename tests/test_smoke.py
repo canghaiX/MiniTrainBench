@@ -13,6 +13,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from minitrainbench.checkpoint import CheckpointManager
+from minitrainbench.communication import _all_to_all_splits
 from minitrainbench.data import SyntheticTokenIterator
 from minitrainbench.deepspeed_benchmark import build_deepspeed_config
 from minitrainbench.distributed import DistributedContext
@@ -122,6 +123,29 @@ def test_deepspeed_config_builder_zero_stages() -> None:
     assert zero3["bf16"]["enabled"] is False
     assert zero3["zero_optimization"]["stage"] == 3
     assert "stage3_prefetch_bucket_size" in zero3["zero_optimization"]
+
+
+def test_all_to_all_split_generation() -> None:
+    world_size = 4
+    base = 8
+    equal_inputs, equal_outputs = _all_to_all_splits(base, world_size, rank=2, mode="equal")
+    assert equal_inputs == [base, base, base, base]
+    assert equal_outputs == [base, base, base, base]
+
+    all_inputs = [
+        _all_to_all_splits(base, world_size, rank=rank, mode="uneven")[0]
+        for rank in range(world_size)
+    ]
+    for rank in range(world_size):
+        input_splits, output_splits = _all_to_all_splits(
+            base,
+            world_size,
+            rank=rank,
+            mode="uneven",
+        )
+        assert input_splits == all_inputs[rank]
+        assert output_splits == [all_inputs[source][rank] for source in range(world_size)]
+        assert sum(input_splits) == sum(output_splits)
 
 
 def test_gradient_sync_policy_and_no_sync_context() -> None:
@@ -678,7 +702,59 @@ def test_gloo_collectives_smoke(tmp_path) -> None:
     statuses = {row["operation"]: row["status"] for row in result["results"]}
     assert statuses["all_reduce"] == "ok"
     assert statuses["all_gather"] == "ok"
+    all_to_all_rows = [
+        row for row in result["results"] if row["operation"] == "all_to_all"
+    ]
+    assert {row["split_mode"] for row in all_to_all_rows} == {"equal", "uneven"}
+    assert {row["status"] for row in all_to_all_rows} <= {"ok", "skipped"}
     assert "all_reduce" in completed.stdout
+
+
+def test_tensor_parallel_cpu_check(tmp_path) -> None:
+    output = tmp_path / "tp.json"
+    environment = os.environ.copy()
+    environment["OMP_NUM_THREADS"] = "1"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nproc_per_node=2",
+            "--module",
+            "minitrainbench",
+            "tp",
+            "check",
+            "--device",
+            "cpu",
+            "--backend",
+            "gloo",
+            "--batch-size",
+            "1",
+            "--seq-length",
+            "2",
+            "--in-features",
+            "8",
+            "--out-features",
+            "8",
+            "--atol",
+            "1e-5",
+            "--output",
+            str(output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=180,
+    )
+    result = json.loads(output.read_text())
+    assert result["benchmark"] == "tensor_parallel"
+    assert result["status"] == "ok"
+    assert result["tp_degree"] == 2
+    assert result["forward_max_error"] <= 1e-5
+    assert result["grad_max_error"] <= 1e-5
+    assert "Column" not in completed.stderr
 
 
 def test_report_renders_infra_metrics(tmp_path) -> None:
@@ -805,8 +881,27 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
                     "latency_ms": 0.1,
                     "bandwidth_gbps": 1.0,
                     "status": "ok",
+                },
+                {
+                    "operation": "all_to_all",
+                    "world_size": 2,
+                    "split_mode": "uneven",
+                    "elements": 1024,
+                    "latency_ms": 0.2,
+                    "bandwidth_gbps": 2.0,
+                    "status": "ok",
                 }
             ],
+        },
+        "tp.json": {
+            "benchmark": "tensor_parallel",
+            "status": "ok",
+            "tp_degree": 2,
+            "device": "cpu",
+            "in_features": 8,
+            "out_features": 8,
+            "forward_max_error": 0.0,
+            "grad_max_error": 0.0,
         },
     }
     paths = []
@@ -836,3 +931,5 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
     assert "54.55%" in report
     assert "4.00" in report
     assert "小规模 collective 更容易受延迟限制" in report
+    assert "all-to-all 对应 MoE expert parallel" in report
+    assert "Tensor Parallel 正确性" in report

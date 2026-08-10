@@ -8,7 +8,8 @@
 MiniTrainBench 是一个 Docker 化的 PyTorch 分布式训练 benchmark 和最小训练 Runtime。
 它使用合成 token 驱动小型 GPT-like 模型，支持 DDP、FSDP、DeepSpeed ZeRO、BF16、
 gradient accumulation、activation checkpointing、分布式 checkpoint/resume、
-PyTorch Profiler trace 和 NCCL collective microbenchmark。
+PyTorch Profiler trace、NCCL collective microbenchmark、all-to-all MoE 通信和 toy
+tensor parallel correctness check。
 
 项目不仅比较吞吐和显存，还实现了 strategy 抽象、checkpoint 原子发布、retention、
 每 rank RNG 保存，以及连续训练与中断恢复之间的精确状态校验。当前已在 8x A100
@@ -28,6 +29,8 @@ Runtime 契约。
 | Repeat summary | 独立 trial、`mean/std/min/max` | 从单次数字升级到可信实验方法 |
 | Profiler | 每 rank Chrome trace、top ops、step breakdown | 展示性能定位思路 |
 | DeepSpeed adapter | ZeRO-2/ZeRO-3 benchmark、统一 JSON | 与业界训练栈横向对照 |
+| all-to-all | equal / uneven split、MoE token dispatch | 补齐 expert parallel 的核心通信语义 |
+| Tensor Parallel | Column/Row Parallel Linear correctness | 展示 TP 切分和梯度聚合的理解 |
 | Report | 吞吐、step time、显存、扩展效率、Runtime 状态 | 让实验结论可读、可复现 |
 | CI | CPU PyTorch + Gloo smoke | 不依赖 GPU 也能守住核心契约 |
 
@@ -112,7 +115,32 @@ digest 时，把 `ShardedTensor` 当普通 tensor 调用 `reshape()`，导致校
 **面试表述**：验证分片 checkpoint 时，不能只比较 rank 0 文件，也不能为了比较而把所有
 state 物化到单卡；应保持分片加载和分片比较。
 
-### 7. 性能指标必须按分布式最慢 rank 统计
+### 7. MoE 的核心不是参数同步，而是 token dispatch
+
+**问题**：如果只看 DDP/FSDP 的 all-reduce、all-gather、reduce-scatter，很容易误以为分布式
+训练的通信问题都一样。但 MoE/expert parallel 的瓶颈往往是 `all_to_all`，因为 router
+决定 token 去向，rank 间会出现不均匀的 token dispatch/combine。
+
+**解决**：在 `comm` 里补 `all_to_all`，并区分 `equal` 和 `uneven` split。`equal` 适合看链路
+上限，`uneven` 更贴近真实 MoE 负载不均。README 和笔记里明确说明，MoE 性能分析不能直接
+拿 all-reduce 结果替代。
+
+**面试表述**：expert parallel 的关键不是“又多了一种 collective”，而是必须同时考虑 router
+负载均衡、capacity factor、buffer packing 和 all-to-all 延迟。
+
+### 8. Tensor Parallel 要先讲切分语义，再讲实现细节
+
+**问题**：很多人一提 TP 就只说“把模型切到多卡上”，但面试官通常会继续追问切在哪一维、
+为什么是 ColumnParallelLinear / RowParallelLinear、以及 backward 时怎么聚合梯度。
+
+**解决**：补一个 toy tensor parallel check，用单卡 reference 对比 Column/Row Parallel
+Linear 的 forward、input grad、weight grad 和 bias grad。`ColumnParallelLinear` 按输出
+维切分，`RowParallelLinear` 按输入维切分并在 partial output 上做聚合。
+
+**面试表述**：TP 不只是“切一半参数”，而是要让切分后的激活流、梯度流和 collective 语义
+都能闭环；PP 还会引入 bubble，SP 则进一步减少 activation 显存。
+
+### 9. 性能指标必须按分布式最慢 rank 统计
 
 **问题**：只记录 rank 0 的局部计时会低估同步训练的真实 step time，因为训练下一步受最慢
 rank 限制。
@@ -123,7 +151,7 @@ rank 限制。
 **边界**：当前短跑默认 `repeat=1`，适合展示覆盖度。性能结论应使用 `REPEAT=3` 或更多，
 并报告均值、标准差和环境信息。
 
-### 8. GPU 代码不能替代 CPU CI
+### 10. GPU 代码不能替代 CPU CI
 
 **问题**：NCCL/FSDP GPU 验证成本高，且 GitHub Actions 默认没有 GPU。
 
@@ -131,7 +159,7 @@ rank 限制。
 两进程 DDP gradient accumulation、checkpoint/resume、legacy checkpoint 降级、
 checkpoint verify、Gloo collective 和报告渲染。GPU 脚本保留为 Docker 证据链。
 
-### 9. repeat 不能只是同一训练状态上的连续窗口
+### 11. repeat 不能只是同一训练状态上的连续窗口
 
 **问题**：如果 `repeat=3` 只是同一个模型和 optimizer 连续训练 3 个测量窗口，得到的
 方差会混入 loss 曲线、optimizer 状态和缓存变化，不是真正独立 trial。
@@ -143,7 +171,7 @@ iterator，并与 checkpoint/resume 参数互斥。报告用 `mean ± std` 展�
 **面试表述**：benchmark repeat 和训练恢复要拆开，这样性能统计和 Runtime 状态语义都更
 干净。
 
-### 10. Profiler 不应该污染主 benchmark
+### 12. Profiler 不应该污染主 benchmark
 
 **问题**：Profiler 会改变 kernel 调度、内存采样和 Python 开销。如果在 `train`
 benchmark 默认打开，会让 tokens/sec 失真。
@@ -155,7 +183,7 @@ Chrome trace、top ops 和 step breakdown。主 benchmark 负责稳定数值，p
 **面试表述**：性能工程不能只报吞吐，还要能从 step breakdown 和 trace 中定位是 compute、
 optimizer 还是 collective 等待。
 
-### 11. DeepSpeed ZeRO 不直接塞进 `TrainingStrategy`
+### 13. DeepSpeed ZeRO 不直接塞进 `TrainingStrategy`
 
 **问题**：DeepSpeed Engine 会接管 backward、step、gradient accumulation 和 checkpoint。
 如果把它强行塞进 DDP/FSDP 的 `Trainer`，两套生命周期会混在一起。
@@ -233,9 +261,31 @@ rank 比较 local shard 并聚合 digest，避免把完整 state 汇集到单卡
 - all-reduce：DDP 同步梯度。
 - all-gather：FSDP 在计算前临时获取完整参数。
 - reduce-scatter：FSDP 聚合梯度后把结果分片回各 rank。
+- all-to-all：MoE expert parallel 中按 expert/rank 重新分发 token。
 
 回答时应补充：collective 的实际代价由消息大小、调用频率、拓扑、rank 数和计算通信重叠
 共同决定，不能只看单次峰值带宽。
+
+### MoE 为什么绕不开 all-to-all？
+
+MoE 的 router 会把不同 token 分配给不同 expert。如果 expert 按 rank 分布，一个 rank
+本地 batch 中的 token 需要发送给多个远端 rank，同时也会接收别的 rank 发来的 token。
+这就是 all-to-all。真实瓶颈还包括 token permutation、capacity overflow、load balance
+和最慢 rank 等待，不能只用 DDP all-reduce 的带宽来估算。
+
+### Tensor Parallel 的 Column/Row Linear 怎么切？
+
+Column parallel 按输出维切权重，每个 rank 计算一段输出 shard，必要时再 concat。
+Row parallel 按输入维切权重，每个 rank 计算 partial output，再通过 all-reduce 求和。
+MLP 里常见 column split 后接 row split，这样中间 hidden 可以保持分片，减少不必要的
+all-gather。
+
+### Pipeline bubble 和 Sequence Parallel 分别解决什么？
+
+Pipeline parallel 把不同 layer 放到不同 stage，但 micro-batch 进入和离开流水线时会有
+空泡。micro-batch 越少，bubble 占比越高；1F1B schedule 可以降低空闲和 activation
+驻留。Sequence Parallel 则通常和 TP 配合，把部分 activation 沿 sequence 维切分，降低
+长序列训练的激活显存，但会带来额外 collective 和随机性管理要求。
 
 ### 如何解释 8 卡 DDP 不是 8 倍加速？
 
@@ -260,13 +310,17 @@ CUDA 计时要同步；多 rank 用 max step time；至少 repeat 多次报告�
 - 能说明 CPU/Gloo CI 覆盖什么、GPU 证据脚本覆盖什么。
 - 能解释为什么 repeat trial 要独立初始化，为什么 profiler 入口与 benchmark 分离。
 - 能解释 ZeRO-2、ZeRO-3 与 FSDP 的显存/通信对比，以及为什么 DeepSpeed adapter 独立。
-- 能诚实说明当前限制：小模型、synthetic data、单节点、无 TP/PP、无跨 world size
-  resharding；仓库已有短跑基线，严谨性能结论需要跑 `run_a100_stability_matrix.sh`。
+- 能解释 MoE token dispatch 为什么是 all-to-all，以及 equal/uneven split 分别看什么。
+- 能解释 toy Tensor Parallel 如何验证 Column/Row Parallel Linear 的 forward/backward。
+- 能诚实说明当前限制：小模型、synthetic data、单节点、toy TP 而非完整 Megatron、
+  无 PP/SP Runtime、无跨 world size resharding；仓库已有短跑基线，严谨性能结论需要跑
+  `run_a100_stability_matrix.sh`。
 
 ## 可直接用于简历或自我介绍的表述
 
 > 实现 Docker 化的最小 PyTorch 分布式训练 Runtime，支持 DDP/FSDP/DeepSpeed ZeRO、
-> NCCL collective、BF16、activation checkpointing 和 1/2/4/8 卡 A100 benchmark；
+> NCCL collective、all-to-all MoE 通信、toy Tensor Parallel correctness、BF16、
+> activation checkpointing 和 1/2/4/8 卡 A100 benchmark；
 > 实现 strategy 抽象、独立 repeat 统计、PyTorch Profiler trace、READY-based 分布式
 > checkpoint 发布、每 rank RNG 精确恢复和 checkpoint state verify，并通过 CPU/Gloo CI
 > 覆盖 DDP accumulation、resume、profiler smoke 与分布式通信 smoke。

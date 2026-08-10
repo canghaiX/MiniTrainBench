@@ -63,6 +63,9 @@ def render_report(paths: list[str]) -> str:
         if item.get("benchmark") == "communication"
         for row in item.get("results", [])
     ]
+    tensor_parallel = [
+        item for item in payloads if item.get("benchmark") == "tensor_parallel"
+    ]
     by_strategy = {
         strategy: sorted(
             [item for item in training if item["strategy"] == strategy],
@@ -197,16 +200,17 @@ def render_report(paths: list[str]) -> str:
             "",
             "### 通信",
             "",
-            "| 操作 | GPU 数 | 元素数 | 延迟 (ms) | 带宽 (GB/s) | 状态 |",
-            "| --- | ---: | ---: | ---: | ---: | --- |",
+            "| 操作 | GPU 数 | Split | 元素数 | 延迟 (ms) | 带宽 (GB/s) | 状态 |",
+            "| --- | ---: | --- | ---: | ---: | ---: | --- |",
         ]
     )
     for item in communication:
         latency = f"{item['latency_ms']:.3f}" if item["status"] == "ok" else "-"
         bandwidth = f"{item['bandwidth_gbps']:.3f}" if item["status"] == "ok" else "-"
+        split_mode = item.get("split_mode", "-") or "-"
         lines.append(
-            f"| {item['operation']} | {item['world_size']} | {item['elements']} | "
-            f"{latency} | {bandwidth} | {item['status']} |"
+            f"| {item['operation']} | {item['world_size']} | {split_mode} | "
+            f"{item['elements']} | {latency} | {bandwidth} | {item['status']} |"
         )
     if communication:
         lines.extend(
@@ -214,7 +218,38 @@ def render_report(paths: list[str]) -> str:
                 "",
                 (
                     "小规模 collective 更容易受延迟限制；较大 tensor 更能暴露带宽上限。"
-                    "可将这些结果与训练 step time 对比，用于估计通信压力。"
+                    "all-to-all 对应 MoE expert parallel 的 token dispatch/combine，"
+                    "可将这些结果与训练 step time 对比，用于估计稀疏模型通信压力。"
+                ),
+            ]
+        )
+    if tensor_parallel:
+        lines.extend(
+            [
+                "",
+                "### Tensor Parallel 正确性",
+                "",
+                (
+                    "| TP degree | Device | In | Out | Forward max error | "
+                    "Grad max error | 状态 |"
+                ),
+                "| ---: | --- | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for item in sorted(tensor_parallel, key=lambda row: row["tp_degree"]):
+            lines.append(
+                f"| {item['tp_degree']} | {item['device']} | "
+                f"{item['in_features']} | {item['out_features']} | "
+                f"{item['forward_max_error']:.6g} | "
+                f"{item['grad_max_error']:.6g} | {item['status']} |"
+            )
+        lines.extend(
+            [
+                "",
+                (
+                    "toy TP 校验把 ColumnParallelLinear 和 RowParallelLinear "
+                    "与单卡 reference 对齐，用于说明 Megatron-style tensor parallel "
+                    "的切分语义和梯度聚合路径。"
                 ),
             ]
         )
