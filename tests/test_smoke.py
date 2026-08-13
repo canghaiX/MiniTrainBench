@@ -10,14 +10,24 @@ from types import SimpleNamespace
 
 import pytest
 
-torch = pytest.importorskip("torch")
+import torch
 
 from minitrainbench.checkpoint import CheckpointManager
 from minitrainbench.communication import _all_to_all_splits
 from minitrainbench.data import SyntheticTokenIterator
 from minitrainbench.deepspeed_benchmark import build_deepspeed_config
 from minitrainbench.distributed import DistributedContext
+from minitrainbench.evidence import (
+    classify_failure,
+    main as evidence_main,
+    parse_megatron_log,
+    render_megatron_report,
+    render_memory_pressure,
+    training_record,
+    validate_megatron_config,
+)
 from minitrainbench.model import GPTConfig, MiniGPT
+from minitrainbench.profiler import _rank_diagnostics
 from minitrainbench.report import render_report
 from minitrainbench.runtime import TrainingConfig
 from minitrainbench.strategy import create_strategy, registered_strategies
@@ -250,8 +260,164 @@ def test_cpu_profiler_smoke(tmp_path) -> None:
     assert summary["benchmark"] == "profile"
     assert summary["world_size"] == 1
     assert summary["step_breakdown"]["step_time_ms"]["mean"] > 0
+    assert summary["rank_diagnostics"]["straggler_ratio"] == pytest.approx(1.0)
+    assert summary["rank_diagnostics"]["overlap_evidence"]["status"] == "not_determined"
     assert (trace_dir / "rank_00000.trace.json").is_file()
     assert (trace_dir / "profile_summary.md").is_file()
+
+
+def test_profiler_rank_diagnostics() -> None:
+    summaries = [
+        {
+            "step_breakdown": {"step_time_ms": {"mean": 10.0}},
+            "collective_time_ms": 2.0,
+            "measured_step_count": 2,
+        },
+        {
+            "step_breakdown": {"step_time_ms": {"mean": 12.0}},
+            "collective_time_ms": 4.0,
+            "measured_step_count": 2,
+        },
+    ]
+    diagnostics = _rank_diagnostics(summaries)
+    assert diagnostics["step_time_ms"] == {"min": 10.0, "p50": 11.0, "max": 12.0}
+    assert diagnostics["straggler_ratio"] == pytest.approx(12.0 / 11.0)
+    assert diagnostics["collective_time_ms"]["mean"] == 3.0
+    assert diagnostics["collective_time_per_step_ms"]["mean"] == 1.5
+
+
+def test_evidence_failure_and_log_parsing(tmp_path) -> None:
+    assert classify_failure(1, "CUDA out of memory")[0] == "oom"
+    assert classify_failure(124, "watchdog timeout") == (
+        "failed",
+        "通信或进程超时",
+    )
+    assert classify_failure(0, "ok") == ("success", "")
+
+    log = """
+iteration 1 | elapsed time per iteration (ms): 120.0
+iteration 2 | elapsed time per iteration (ms): 100.0
+tokens/sec: 4096.0
+max memory: 1234 MiB
+number of parameters: 1000000
+"""
+    metrics = parse_megatron_log(log)
+    assert metrics["step_time_ms"] == 100.0
+    assert metrics["step_time_ms_samples"] == [120.0, 100.0]
+    assert metrics["tokens_per_sec"] == 4096.0
+    assert metrics["max_memory_mb"] == 1234.0
+    assert metrics["parameters"] == 1_000_000
+    assert parse_megatron_log("max memory allocated: 2048 MB")["max_memory_mb"] == 2048
+
+    result_path = tmp_path / "training.json"
+    result_path.write_text(
+        json.dumps(
+            {
+                "strategy": "ddp",
+                "world_size": 8,
+                "precision": "bf16",
+                "parameters": 10,
+                "tokens_per_sec": 100.0,
+                "step_time_ms": 20.0,
+                "max_cuda_memory_mb": 1000.0,
+            }
+        )
+    )
+    record = training_record(
+        benchmark_id="small_ddp_8gpu",
+        config={"tier": "small", "strategy": "ddp", "world_size": 8},
+        command=["torchrun"],
+        output="ok",
+        returncode=0,
+        result_path=str(result_path),
+    )
+    assert record["status"] == "success"
+    assert record["parameters"] == 10
+    assert "small" in render_memory_pressure([record])
+
+    normalized_path = tmp_path / "normalized.json"
+    training_log = tmp_path / "training.log"
+    training_log.write_text("ok\n")
+    evidence_main(
+        [
+            "memory-record",
+            "--benchmark-id",
+            "small_ddp_8gpu",
+            "--config-json",
+            json.dumps({"tier": "small", "strategy": "ddp", "world_size": 8}),
+            "--command",
+            "torchrun --standalone",
+            "--log",
+            str(training_log),
+            "--returncode",
+            "0",
+            "--result",
+            str(result_path),
+            "--output",
+            str(normalized_path),
+        ]
+    )
+    assert json.loads(normalized_path.read_text())["command"] == "torchrun --standalone"
+
+    missing_result = training_record(
+        benchmark_id="missing",
+        config={"strategy": "ddp", "world_size": 8},
+        command="torchrun",
+        output="completed",
+        returncode=0,
+    )
+    assert missing_result["status"] == "failed_parse"
+    assert missing_result["failure_type"] == "missing_result"
+    oom_record = training_record(
+        benchmark_id="oom",
+        config={"strategy": "ddp", "world_size": 8},
+        command="torchrun",
+        output="CUDA out of memory",
+        returncode=1,
+    )
+    assert oom_record["status"] == "oom"
+    assert oom_record["failure_type"] == "cuda_oom"
+
+    megatron_report = render_megatron_report(
+        [
+            {
+                "name": "tp2_pp2",
+                "tp": 2,
+                "pp": 2,
+                "dp": 2,
+                "status": "success",
+                "metrics": metrics,
+            }
+        ]
+    )
+    assert "tp2_pp2" in megatron_report
+    assert "4096.0" in megatron_report
+
+
+def test_megatron_parallel_and_batch_constraints() -> None:
+    assert validate_megatron_config(
+        world_size=8,
+        tensor_parallel=2,
+        pipeline_parallel=2,
+        micro_batch_size=1,
+        global_batch_size=8,
+    ) == 2
+    with pytest.raises(ValueError, match=r"TP\*PP"):
+        validate_megatron_config(
+            world_size=8,
+            tensor_parallel=3,
+            pipeline_parallel=1,
+            micro_batch_size=1,
+            global_batch_size=8,
+        )
+    with pytest.raises(ValueError, match="global batch"):
+        validate_megatron_config(
+            world_size=8,
+            tensor_parallel=2,
+            pipeline_parallel=2,
+            micro_batch_size=2,
+            global_batch_size=6,
+        )
 
 
 def test_cpu_doctor_smoke(tmp_path) -> None:

@@ -1,0 +1,31 @@
+{
+  "benchmark": "memory_pressure",
+  "benchmark_id": "large_ddp_8gpu",
+  "command": "docker run --rm --gpus all --ipc=host --network=host -v /data/demo:/workspace -w /workspace minitrainbench:gpu torchrun --standalone --nproc_per_node=8 -m minitrainbench train --strategy ddp --precision bf16 --batch-size 1 --seq-length 512 --vocab-size 32768 --d-model 1536 --n-heads 24 --n-layers 24 --steps 3 --warmup-steps 1 --repeat 1 --output /workspace/results/memory_pressure/raw/large_ddp_8gpu.json --activation-checkpointing ",
+  "config": {
+    "activation_checkpointing": 1,
+    "batch_size": 1,
+    "d_model": 1536,
+    "n_heads": 24,
+    "n_layers": 24,
+    "precision": "bf16",
+    "seq_length": 512,
+    "strategy": "ddp",
+    "tier": "large",
+    "vocab_size": 32768,
+    "world_size": 8
+  },
+  "failure_reason": null,
+  "failure_type": null,
+  "max_cuda_memory_mb": 16904.04296875,
+  "parameters": 731077632,
+  "precision": "bf16",
+  "returncode": 0,
+  "source_result": "results/memory_pressure/raw/large_ddp_8gpu.json",
+  "status": "success",
+  "step_time_ms": 217.3765106201172,
+  "strategy": "ddp",
+  "summary": null,
+  "tokens_per_sec": 18842.88227976061,
+  "world_size": 8
+}

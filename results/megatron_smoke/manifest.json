@@ -1,0 +1,10 @@
+{
+  "benchmark": "megatron_matrix",
+  "environment": null,
+  "image": "nvcr.io/nvidia/pytorch:26.01-py3",
+  "megatron_commit": null,
+  "megatron_ref": "core_v0.18.2",
+  "records": [],
+  "status": "not_run",
+  "status_reason": "当前节点无法从 GitHub 获取固定 ref，且未提供可校验的外部 MEGATRON_DIR；未生成性能数据。"
+}

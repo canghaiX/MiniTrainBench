@@ -97,6 +97,64 @@ def _collective_events(profiler: torch.profiler.profile) -> list[dict[str, Any]]
     return sorted(rows, key=lambda row: row["time_ms"], reverse=True)[:20]
 
 
+def _collective_time_ms(rows: list[dict[str, Any]]) -> float:
+    """优先统计 PyTorch 记录的 nccl:* 事件，避免 host/device 重复计数。"""
+    nccl_rows = [
+        row for row in rows if str(row["name"]).lower().startswith(("nccl:", "gloo:"))
+    ]
+    return sum(float(row["time_ms"]) for row in nccl_rows)
+
+
+def _rank_diagnostics(rank_summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    step_times = sorted(
+        float(item["step_breakdown"]["step_time_ms"]["mean"])
+        for item in rank_summaries
+    )
+    collective_times = [float(item["collective_time_ms"]) for item in rank_summaries]
+    collective_times_per_step = [
+        float(item["collective_time_ms"])
+        / max(int(item.get("measured_step_count", 1)), 1)
+        for item in rank_summaries
+    ]
+    if not step_times:
+        return {
+            "step_time_ms": None,
+            "collective_time_ms": None,
+            "collective_time_per_step_ms": None,
+            "straggler_ratio": None,
+            "overlap_evidence": {
+                "status": "not_determined",
+                "reason": "key_averages 不保留跨 stream 时间线，需查看 Chrome trace。",
+            },
+        }
+    median = statistics.median(step_times)
+    return {
+        "step_time_ms": {
+            "min": step_times[0],
+            "p50": median,
+            "max": step_times[-1],
+        },
+        "collective_time_ms": {
+            "min": min(collective_times),
+            "mean": statistics.fmean(collective_times),
+            "max": max(collective_times),
+        },
+        "collective_time_per_step_ms": {
+            "min": min(collective_times_per_step),
+            "mean": statistics.fmean(collective_times_per_step),
+            "max": max(collective_times_per_step),
+        },
+        "straggler_ratio": step_times[-1] / median if median else None,
+        "overlap_evidence": {
+            "status": "not_determined",
+            "reason": (
+                "当前摘要只聚合 op 时间，不能证明计算与通信是否在不同 CUDA stream 上重叠；"
+                "请用 Chrome trace 或 Perfetto 检查时间线。"
+            ),
+        },
+    }
+
+
 def _gather_rank_summaries(local_summary: dict[str, Any]) -> list[dict[str, Any]]:
     if not dist.is_available() or not dist.is_initialized():
         return [local_summary]
@@ -124,6 +182,33 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             f"| {name} | {values['mean']:.2f} | {values['std']:.2f} | "
             f"{values['min']:.2f} | {values['max']:.2f} |"
         )
+    diagnostics = payload.get("rank_diagnostics", {})
+    rank_steps = diagnostics.get("step_time_ms")
+    if rank_steps:
+        lines.extend(
+            [
+                "",
+                "## Rank 诊断",
+                "",
+                "| 指标 | 值 |",
+                "| --- | ---: |",
+                f"| Step min (ms) | {rank_steps['min']:.2f} |",
+                f"| Step p50 (ms) | {rank_steps['p50']:.2f} |",
+                f"| Step max (ms) | {rank_steps['max']:.2f} |",
+                f"| Straggler ratio (max/p50) | {diagnostics['straggler_ratio']:.3f} |",
+                (
+                    "| 每 rank collective total (ms, mean) | "
+                    f"{diagnostics['collective_time_ms']['mean']:.2f} |"
+                ),
+                (
+                    "| 每 rank collective/step (ms, mean) | "
+                    f"{diagnostics['collective_time_per_step_ms']['mean']:.2f} |"
+                ),
+                "",
+                "计算通信 overlap：未确定。`key_averages()` 不保留跨 CUDA stream 的时间关系；"
+                "请以每 rank Chrome trace 的实际时间线作为证据。",
+            ]
+        )
     lines.extend(["", "## Rank Top Ops", ""])
     for rank_summary in payload["rank_summaries"]:
         lines.extend(
@@ -138,15 +223,19 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             lines.append(
                 f"| CUDA | {row['name']} | {row['calls']} | {row['time_ms']:.2f} |"
             )
+        for row in rank_summary["top_cpu_ops"][:8]:
+            lines.append(
+                f"| CPU | {row['name']} | {row['calls']} | {row['time_ms']:.2f} |"
+            )
         for row in rank_summary["collectives"][:8]:
             lines.append(
                 f"| Collective | {row['name']} | {row['calls']} | {row['time_ms']:.2f} |"
             )
-        if not rank_summary["top_cuda_ops"] and not rank_summary["collectives"]:
-            for row in rank_summary["top_cpu_ops"][:8]:
-                lines.append(
-                    f"| CPU | {row['name']} | {row['calls']} | {row['time_ms']:.2f} |"
-                )
+        if not any(
+            rank_summary[name]
+            for name in ("top_cuda_ops", "top_cpu_ops", "collectives")
+        ):
+            lines.append("| - | 未采集到 op | 0 | 0.00 |")
         lines.append("")
     lines.append(
         "原始 Chrome trace 文件通常较大，默认不提交到 Git；请在本地用 "
@@ -194,13 +283,24 @@ def profile_training(args: Any) -> dict[str, Any] | None:
         local_summary = {
             "rank": trainer.context.rank,
             "trace_file": str(trace_path),
+            "measured_step_count": len(measured),
+            "step_breakdown": _summarize_steps(measured),
             "top_cpu_ops": _top_events(profiler, ("self_cpu_time_total",)),
             "top_cuda_ops": _top_events(
                 profiler,
                 ("self_cuda_time_total", "self_device_time_total"),
             ),
             "collectives": _collective_events(profiler),
+            "collective_time_ms": 0.0,
+            "max_cuda_memory_mb": (
+                float(torch.cuda.max_memory_allocated(trainer.context.device) / 1024**2)
+                if trainer.context.device.type == "cuda"
+                else 0.0
+            ),
         }
+        local_summary["collective_time_ms"] = _collective_time_ms(
+            local_summary["collectives"]
+        )
         (trace_dir / f"rank_{trainer.context.rank:05d}_summary.json").write_text(
             json.dumps(local_summary, ensure_ascii=False, indent=2, sort_keys=True)
             + "\n"
@@ -233,6 +333,7 @@ def profile_training(args: Any) -> dict[str, Any] | None:
             "model_config": trainer.config.model_dict(),
             "step_breakdown": _summarize_steps(measured),
             "rank_summaries": rank_summaries,
+            "rank_diagnostics": _rank_diagnostics(rank_summaries),
             "environment": {
                 "torch": torch.__version__,
                 "cuda": torch.version.cuda,

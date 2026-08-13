@@ -1,0 +1,31 @@
+{
+  "benchmark": "memory_pressure",
+  "benchmark_id": "large_zero3_8gpu",
+  "command": "docker run --rm --gpus all --ipc=host --network=host -v /data/demo:/workspace -w /workspace minitrainbench:deepspeed torchrun --standalone --nproc_per_node=8 -m minitrainbench deepspeed --zero-stage 3 --precision bf16 --batch-size 1 --seq-length 512 --vocab-size 32768 --d-model 1536 --n-heads 24 --n-layers 24 --steps 3 --warmup-steps 1 --repeat 1 --output /workspace/results/memory_pressure/raw/large_zero3_8gpu.json --activation-checkpointing ",
+  "config": {
+    "activation_checkpointing": 1,
+    "batch_size": 1,
+    "d_model": 1536,
+    "n_heads": 24,
+    "n_layers": 24,
+    "precision": "bf16",
+    "seq_length": 512,
+    "strategy": "zero3",
+    "tier": "large",
+    "vocab_size": 32768,
+    "world_size": 8
+  },
+  "failure_reason": null,
+  "failure_type": null,
+  "max_cuda_memory_mb": 3974.107421875,
+  "parameters": 731077632,
+  "precision": "bf16",
+  "returncode": 0,
+  "source_result": "results/memory_pressure/raw/large_zero3_8gpu.json",
+  "status": "success",
+  "step_time_ms": 906.7166137695312,
+  "strategy": "deepspeed_zero3",
+  "summary": null,
+  "tokens_per_sec": 4517.398201155183,
+  "world_size": 8
+}

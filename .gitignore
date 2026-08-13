@@ -12,3 +12,7 @@ results/*features_smoke.json
 results/runtime_determinism/*
 !results/runtime_determinism/verification.json
 results/**/rank_*.trace.json
+results/memory_pressure/logs/
+results/memory_pressure/raw/
+results/megatron_smoke/logs/
+results/megatron_smoke/tensorboard/

@@ -6,6 +6,8 @@ MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark
 面试复盘和训练 Infra 高频问题见 [项目复盘与面试指南](docs/interview_guide.md)。
 MoE/expert parallel 通信笔记见 [MoE 训练笔记](docs/moe_training_notes.md)，
 Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md)。
+Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/megatron_case_study.md)，
+8 卡性能定位方法见 [8 卡 Profiler Case Study](docs/profiler_case_study_8gpu.md)。
 多机与 NCCL 诊断见 [多机与 NCCL 诊断笔记](docs/multinode_nccl_diagnostics.md)。
 
 ## 能力矩阵
@@ -15,10 +17,12 @@ Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md
 | DDP/FSDP | implemented + benchmarked | 1/2/4/8 卡训练结果、repeat=3 稳定性矩阵 |
 | DeepSpeed ZeRO | benchmark adapter | ZeRO-2/ZeRO-3 与 DDP baseline 同表对比 |
 | Checkpoint/resume | DDP/FSDP implemented | DCP、READY/latest、RNG state、`checkpoint verify` |
-| Profiler | implemented | PyTorch Profiler summary 已提交，原始 trace 不提交 |
+| Profiler | implemented + 2/8 卡实测 | PyTorch Profiler summary、跨 rank step/collective/straggler 分析 |
 | Fault tolerance | smoke + resume evidence | 精确恢复、半成品 checkpoint 跳过、配置不匹配拒绝 |
 | MoE | all-to-all microbenchmark + routing demo | equal/uneven split、MoE token dispatch 设计笔记 |
 | Tensor Parallel | toy correctness check + notes | Column/Row Parallel Linear、TP MLP、Sequence Parallel |
+| Megatron-LM | case study + external runner | 固定 ref 的外部源码 smoke/matrix；官方环境实测尚未产出 |
+| Memory pressure | 8 卡 benchmarked | 23.2M/168.5M/731.1M/2.60B 的 DDP/FSDP/ZeRO 成功与 OOM 证据 |
 | Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
 | RLHF/GRPO | not implemented | 当前聚焦 pretraining runtime / distributed infra |
 
@@ -34,11 +38,15 @@ Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md
 - 保存每个 rank 的 RNG 状态，支持带 dropout 的精确 checkpoint/resume 校验。
 - 支持独立 repeat trial，报告 `mean ± std`，避免单次短跑被当成严谨性能结论。
 - 支持 PyTorch Profiler，导出每 rank Chrome trace 与 rank 0 Markdown 摘要。
+- 汇总 rank min/p50/max、collective time 和 straggler ratio；overlap 无 trace 证据时明确
+  标为“未确定”。
 - 提供 `minitrainbench doctor` 检查 GPU、NCCL、网卡和 rendezvous 连通性。
 - 提供 `minitrainbench fault smoke`，把精确 resume、半成品 checkpoint 和配置不匹配这些常见故障边界写成可复现证据。
 - 提供 toy tensor parallel correctness check，验证 Column/Row Parallel Linear
   与单卡 reference 的 forward/backward 一致性，并补了 toy MLP 与 sequence parallel demo。
 - 提供 toy MoE routing demo，记录 top-1 dispatch、capacity、overflow 和 load imbalance。
+- 提供显存压力矩阵和固定版本的 Megatron-LM 外部运行脚本，为后续真实框架结果与
+  toy TP/SP 的对照保留可复现入口。
 - 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
 - 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
@@ -155,6 +163,49 @@ deterministic synthetic iterator，报告中主指标渲染为 `mean ± std`。
 - `results/moe_comm/report.md`：2/4/8 卡 all-to-all equal/uneven 通信结果。
 - `results/tensor_parallel/report.md`：toy Tensor Parallel correctness check。
 - `results/profile/profile_summary.md`：DDP/FSDP PyTorch Profiler 摘要；原始 trace 被 `.gitignore` 排除。
+- `results/memory_pressure/report.md`：多模型规模 DDP/FSDP/ZeRO 的成功、OOM 和失败证据。
+- `results/profile_8gpu/profile_summary.md`：8 卡 DDP/FSDP profiler 跨 rank 摘要。
+
+`results/megatron_smoke/report.md` 当前以 `not_run` 明确记录外部官方源码不可用，未填写
+任何性能数字；因此能力矩阵不将 Megatron 标为 `benchmarked`。runner 只有在外部官方
+源码、固定 ref 与容器环境校验通过后才会写入真实矩阵记录。
+
+运行显存压力矩阵：
+
+```bash
+IMAGE=minitrainbench:gpu DEEPSPEED_IMAGE=minitrainbench:deepspeed \
+  scripts/run_memory_pressure_matrix.sh
+```
+
+脚本默认使用 8 卡，依次运行 small、medium、large、stress 四档 DDP/FSDP/ZeRO-2/3。
+单项 OOM 或失败不会中断其余实验，而是写入 `records/*.json` 和最终报告。可以通过
+`TIERS`、`STRATEGIES`、`WORLD_SIZE`、`STEPS` 和 `TIMEOUT_SECONDS` 缩小矩阵。
+脚本默认拒绝在 GPU 已有超过 1 GB 显存占用时启动，避免并发作业污染结果；只有明确
+接受该风险时才设置 `ALLOW_BUSY_GPUS=1`。
+
+运行 8 卡 DDP/FSDP Profiler：
+
+```bash
+IMAGE=minitrainbench:gpu NPROC=8 GRAD_ACCUM_STEPS=4 \
+  OUT_DIR=results/profile_8gpu scripts/run_profiler_matrix.sh
+```
+
+摘要包含 top CPU/CUDA/NCCL op、step breakdown、rank min/p50/max、collective time 和
+straggler ratio。`key_averages()` 无法证明计算通信 overlap，因此报告只会在 Chrome
+trace 时间线可确认时下结论。
+
+运行外部 Megatron-LM smoke / TP-PP-DP 矩阵：
+
+```bash
+MEGATRON_DIR=/path/to/Megatron-LM \
+MEGATRON_REF=core_v0.18.2 \
+MEGATRON_IMAGE=nvcr.io/nvidia/pytorch:26.01-py3 \
+  scripts/run_megatron_tp_pp_matrix.sh
+```
+
+脚本要求外部仓库 HEAD 与固定 ref 一致，但不会切换或修改外部仓库。默认运行
+TP/PP=`1/1`、`2/1`、`4/1`、`2/2`、`1/4`，使用 mock data，并保存完整命令、commit、
+日志解析结果和失败原因。MiniTrainBench 不包含 Megatron 源码，也不宣称实现完整 PP。
 
 按 GPU 数运行短版 DDP benchmark：
 
@@ -441,6 +492,47 @@ trace 适合继续检查 kernel 时间线、rank 间等待、collective 调用�
 普通 benchmark 不默认开启 profiler，因为 profiler 会引入额外开销，影响 tokens/sec。
 因此项目把“计时用 benchmark”和“定位用 profile”拆成两个入口：前者沉淀稳定数值，
 后者沉淀性能证据。
+
+### 8 卡 Profiler Case Study
+
+同一 23.2M 模型、BF16、`grad_accum_steps=4` 下，DDP 平均 step time 为 99.11 ms，
+FSDP 为 199.49 ms；DDP 每 rank 峰值显存约 569.65 MB，FSDP 为 131.83-134.30 MB。
+DDP 主要 collective 是 all-reduce，FSDP 则在 profile window 内出现更高频的
+all-gather/reduce-scatter。两组 rank `max/p50` 均低于 1.002，没有观察到明显
+step-time straggler。collective event duration 可能与计算重叠，因此不能当作纯阻塞
+时间；trace 未提交，overlap 结论保持“未确定”。完整分析见
+[8 卡 Profiler Case Study](docs/profiler_case_study_8gpu.md)。
+
+## 显存压力矩阵
+
+8 卡 BF16、activation checkpointing、短测量窗口下，模型从 23.2M 扩大到 2.60B 参数：
+
+| 规模 | DDP | FSDP | ZeRO-2 | ZeRO-3 |
+| --- | --- | --- | --- | --- |
+| 23.2M | 133.6K tok/s, 568 MB | 91.0K, 123 MB | 114.6K, 2057 MB | 25.2K, 1118 MB |
+| 168.5M | 56.7K, 3892 MB | 48.8K, 501 MB | 62.9K, 2828 MB | 10.3K, 1732 MB |
+| 731.1M | 18.8K, 16904 MB | 23.6K, 1844 MB | 31.6K, 5472 MB | 4.5K, 3974 MB |
+| 2.60B | OOM | 16.6K, 6371 MB | 18.6K, 12582 MB | 4.3K, 10153 MB |
+
+这组结果给出的边界比小模型 baseline 更明确：DDP 在 small/medium 仍有较低框架开销，
+但显存随参数规模快速上升；到 731.1M 时 FSDP 已同时取得更低显存和更高吞吐，到
+2.60B 时 DDP OOM，而三种分片策略仍可训练。当前 ZeRO-3 在各档位均受细粒度参数
+gather 和 engine 开销影响，不能把“分片更彻底”直接等价为“吞吐更高”。这些数值只有
+3 measured steps，适合说明可训练边界，不替代 repeat=3 的稳定吞吐结论。完整命令、
+状态和失败类型见 [显存压力报告](results/memory_pressure/report.md)。
+
+## Megatron-LM Case Study
+
+项目没有复刻完整 Megatron：内部 Runtime 负责可验证的 DDP/FSDP、checkpoint、Profiler、
+MoE all-to-all 和 toy TP/SP；[Megatron 工程 Case Study](docs/megatron_case_study.md)
+对照真实框架的 parallel groups、TP layers、pipeline schedule、distributed optimizer 和
+distributed checkpoint。外部 runner 固定 `core_v0.18.2`，要求用户提供官方源码并记录
+commit、容器、软件版本和完整命令。当前未在匹配的官方 Megatron 环境产出实测，因此
+README 不展示 TP/PP 性能数字，也不把 Megatron 标为 benchmarked。
+
+没有实现完整 Megatron、多机或 RLHF 是主动控制范围：本项目优先证明 pretraining runtime
+的通信、显存、恢复和性能诊断能力。生产级 PP schedule、跨节点 fabric 验证和训练后阶段
+需要独立的系统边界，不用未经验证的 toy 实现填充能力矩阵。
 
 ## ZeRO 对比边界
 

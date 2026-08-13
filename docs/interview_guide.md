@@ -28,6 +28,8 @@ Runtime 契约。
 | `checkpoint verify` | 比较模型、optimizer、TrainState、RNG digest | 从“能恢复”升级到“可证明恢复正确” |
 | Repeat summary | 独立 trial、`mean/std/min/max` | 从单次数字升级到可信实验方法 |
 | Profiler | 每 rank Chrome trace、top ops、step breakdown | 展示性能定位思路 |
+| 8 卡性能证据 | memory pressure、rank/collective profiler 诊断 | 解释规模变化下的显存通信取舍 |
+| Megatron case study | parallel groups、TP/PP、distributed optimizer、checkpoint | 对照 toy Runtime 与生产框架边界 |
 | DeepSpeed adapter | ZeRO-2/ZeRO-3 benchmark、统一 JSON | 与业界训练栈横向对照 |
 | all-to-all | equal / uneven split、MoE token dispatch | 补齐 expert parallel 的核心通信语义 |
 | Tensor Parallel | Column/Row Parallel Linear correctness | 展示 TP 切分和梯度聚合的理解 |
@@ -41,6 +43,19 @@ pretraining runtime 和单节点分布式 infra：DDP/FSDP/ZeRO、checkpoint/res
 profiler、collective、MoE all-to-all 和 toy TP 都有可运行证据。Multi-node 没做，是因为
 没有稳定多机资源时很难提交可信的 rdvz、hostfile、跨节点 NCCL 结果；RLHF/GRPO 没做，
 是因为它们属于 post-training pipeline，和本项目的训练 Runtime/通信性能主线不同。
+
+Megatron-LM 也采用同样边界：项目没有低质量复刻整个框架，而是自己实现可验证的
+toy TP/SP 与 Runtime 契约，再固定上游版本阅读关键链路并准备外部 8 卡 TP/PP/DP
+runner。当前官方环境实测为 `not_run`，面试时不能把 runner 说成已完成 benchmark。
+
+90 秒表述：
+
+> 我没有复刻完整 Megatron，而是把项目分成两层：MiniTrainBench 内部实现可验证的
+> DDP/FSDP、checkpoint、Profiler、MoE all-to-all 和 toy TP/SP；外部读取 Megatron 的
+> parallel groups、pipeline schedule、distributed optimizer 和 checkpoint 关键链路，
+> 并准备了固定版本的 8 卡 TP/PP/DP runner。当前官方环境还没有完成实测，所以我只把
+> case study 和可复现脚本作为证据，不展示性能数字。这样既说明机制理解，也如实区分
+> toy Runtime 与生产训练框架的边界。
 
 面试时可以这样说：我把仓库边界写清楚，是为了让 reviewer 快速知道哪些能力已经实现并
 benchmark，哪些属于后续扩展，而不是把不完整的多机或 RLHF demo 混进主项目。

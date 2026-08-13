@@ -7,8 +7,10 @@ OUT_DIR="${OUT_DIR:-results/profiler}"
 PROFILE_WAIT="${PROFILE_WAIT:-1}"
 PROFILE_WARMUP="${PROFILE_WARMUP:-1}"
 PROFILE_ACTIVE="${PROFILE_ACTIVE:-3}"
+GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-4}"
 RECORD_SHAPES="${RECORD_SHAPES:-0}"
 WITH_STACK="${WITH_STACK:-0}"
+ALLOW_BUSY_GPUS="${ALLOW_BUSY_GPUS:-0}"
 
 BATCH_SIZE="${BATCH_SIZE:-1}"
 SEQ_LENGTH="${SEQ_LENGTH:-256}"
@@ -16,6 +18,19 @@ VOCAB_SIZE="${VOCAB_SIZE:-8192}"
 D_MODEL="${D_MODEL:-512}"
 N_HEADS="${N_HEADS:-8}"
 N_LAYERS="${N_LAYERS:-6}"
+
+if [[ "${ALLOW_BUSY_GPUS}" != "1" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+  busy_gpus="$(
+    nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits \
+      | awk -F, '$2 + 0 > 1024 {gsub(/ /, "", $1); print $1}' \
+      | paste -sd, -
+  )"
+  if [[ -n "${busy_gpus}" ]]; then
+    echo "GPU ${busy_gpus} 已有超过 1024 MB 显存占用；拒绝污染 Profiler 证据。" >&2
+    echo "确认允许并发采样时设置 ALLOW_BUSY_GPUS=1。" >&2
+    exit 2
+  fi
+fi
 
 mkdir -p "${OUT_DIR}"
 
@@ -36,6 +51,7 @@ run_profile() {
     --d-model "${D_MODEL}" \
     --n-heads "${N_HEADS}" \
     --n-layers "${N_LAYERS}" \
+    --grad-accum-steps "${GRAD_ACCUM_STEPS}" \
     --profile-wait "${PROFILE_WAIT}" \
     --profile-warmup "${PROFILE_WARMUP}" \
     --profile-active "${PROFILE_ACTIVE}" \
