@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +19,7 @@ from minitrainbench.data import SyntheticTokenIterator
 from minitrainbench.deepspeed_benchmark import build_deepspeed_config
 from minitrainbench.distributed import DistributedContext
 from minitrainbench.evidence import (
+    build_evidence_manifest,
     classify_failure,
     parse_megatron_log,
     render_megatron_report,
@@ -28,7 +31,7 @@ from minitrainbench.evidence import main as evidence_main
 from minitrainbench.model import GPTConfig, MiniGPT
 from minitrainbench.profiler import _rank_diagnostics
 from minitrainbench.report import render_report
-from minitrainbench.runtime import TrainingConfig
+from minitrainbench.runtime import TrainingConfig, _write_json
 from minitrainbench.scheduler import LearningRateScheduler
 from minitrainbench.strategy import create_strategy, registered_strategies
 from minitrainbench.verification import _validate_pair
@@ -207,6 +210,78 @@ def test_report_renders_runtime_stability_fields(tmp_path) -> None:
     assert "LR scheduler" in report
     assert "all_rank_fail_fast" in report
     assert "cosine" in report
+
+
+def test_provenance_is_added_to_json_and_can_be_complete(tmp_path, monkeypatch) -> None:
+    values = {
+        "MINITRAINBENCH_GIT_REVISION": "a" * 40,
+        "MINITRAINBENCH_GIT_DIRTY": "false",
+        "MINITRAINBENCH_IMAGE_REF": "minitrainbench:gpu",
+        "MINITRAINBENCH_IMAGE_ID": "sha256:" + "b" * 64,
+        "MINITRAINBENCH_BASE_IMAGE": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:" + "c" * 64,
+        "MINITRAINBENCH_BUILD_REVISION": "a" * 40,
+        "MINITRAINBENCH_COMMAND": "torchrun --standalone",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    output = tmp_path / "result.json"
+    payload = {"benchmark": "test"}
+    _write_json(str(output), payload)
+    result = json.loads(output.read_text())
+    assert result["provenance"]["complete"] is True
+    assert result["provenance"]["git_revision"] == "a" * 40
+    assert result["environment"]["torch"]
+
+
+def test_report_warns_about_mixed_provenance(tmp_path) -> None:
+    payloads = []
+    for index in range(2):
+        payloads.append(
+            {
+                "benchmark": "training",
+                "strategy": "ddp",
+                "world_size": index + 1,
+                "precision": "fp32",
+                "tokens_per_sec": 10.0,
+                "step_time_ms": 100.0,
+                "data_time_ms": 1.0,
+                "forward_backward_ms": 90.0,
+                "optimizer_step_ms": 9.0,
+                "max_cuda_memory_mb": 10.0,
+                "provenance": {
+                    "complete": True,
+                    "git_revision": "a" * 40,
+                    "image_id": f"sha256:{index}" + "b" * 63,
+                    "base_image": "pytorch/pytorch:2.10.0",
+                },
+            }
+        )
+    paths = []
+    for index, payload in enumerate(payloads):
+        path = tmp_path / f"result-{index}.json"
+        path.write_text(json.dumps(payload))
+        paths.append(str(path))
+    report = render_report(paths)
+    assert "输入结果混用了源码 revision、容器 image ID 或 base image" in report
+
+
+def test_evidence_manifest_records_hash_and_provenance(tmp_path) -> None:
+    path = tmp_path / "result.json"
+    payload = {
+        "benchmark": "training",
+        "status": "success",
+        "world_size": 2,
+        "strategy": "ddp",
+        "provenance": {
+            "complete": True,
+            "git_revision": "a" * 40,
+            "image_id": "sha256:" + "b" * 64,
+        },
+    }
+    path.write_text(json.dumps(payload))
+    manifest = build_evidence_manifest([str(path)])
+    assert manifest["complete"] is True
+    assert manifest["entries"][0]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_deepspeed_config_builder_zero_stages() -> None:
@@ -711,6 +786,166 @@ def test_gloo_ddp_gradient_accumulation_auto_smoke(tmp_path) -> None:
     assert result["world_size"] == 2
     assert result["resolved_gradient_sync_mode"] == "last"
     assert result["synchronized_microbatches_per_step"] == 1
+
+
+def test_gloo_rank_crash_preserves_checkpoint_and_exact_resume(tmp_path) -> None:
+    reference_dir = tmp_path / "reference"
+    interrupted_dir = tmp_path / "interrupted"
+    environment = os.environ.copy()
+    environment["OMP_NUM_THREADS"] = "1"
+    environment["MKL_NUM_THREADS"] = "1"
+    common = [
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
+        "--standalone",
+        "--nproc_per_node=2",
+        "--module",
+        "minitrainbench",
+    ]
+    train_args = [
+        "--device",
+        "cpu",
+        "--backend",
+        "gloo",
+        "--strategy",
+        "ddp",
+        "--precision",
+        "fp32",
+        "--batch-size",
+        "1",
+        "--seq-length",
+        "8",
+        "--vocab-size",
+        "64",
+        "--d-model",
+        "16",
+        "--n-heads",
+        "4",
+        "--n-layers",
+        "1",
+        "--dropout",
+        "0.1",
+        "--warmup-steps",
+        "0",
+        "--keep-last",
+        "0",
+    ]
+
+    subprocess.run(
+        common
+        + ["train"]
+        + train_args
+        + [
+            "--steps",
+            "2",
+            "--checkpoint-dir",
+            str(reference_dir),
+            "--save-every",
+            "2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=240,
+    )
+    subprocess.run(
+        common
+        + ["train"]
+        + train_args
+        + [
+            "--steps",
+            "1",
+            "--checkpoint-dir",
+            str(interrupted_dir),
+            "--save-every",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=240,
+    )
+
+    def tree_digest(root: Path) -> str:
+        digest = hashlib.sha256()
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(path.read_bytes())
+        return digest.hexdigest()
+
+    before = tree_digest(interrupted_dir)
+    crashed = subprocess.run(
+        common
+        + ["fault", "crash-worker"]
+        + train_args
+        + [
+            "--steps",
+            "1",
+            "--checkpoint-dir",
+            str(interrupted_dir),
+            "--resume",
+            "latest",
+            "--crash-rank",
+            "1",
+            "--crash-at-step",
+            "1",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=240,
+    )
+    assert crashed.returncode != 0
+    assert tree_digest(interrupted_dir) == before
+
+    subprocess.run(
+        common
+        + ["train"]
+        + train_args
+        + [
+            "--steps",
+            "1",
+            "--checkpoint-dir",
+            str(interrupted_dir),
+            "--resume",
+            "latest",
+            "--save-every",
+            "2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=240,
+    )
+    verification = tmp_path / "verification.json"
+    subprocess.run(
+        common
+        + [
+            "checkpoint",
+            "verify",
+            "--device",
+            "cpu",
+            "--backend",
+            "gloo",
+            "--left",
+            str(reference_dir / "step_00000002"),
+            "--right",
+            str(interrupted_dir / "step_00000002"),
+            "--output",
+            str(verification),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=240,
+    )
+    assert json.loads(verification.read_text())["exact_match"] is True
 
 
 def test_synthetic_iterator_is_step_deterministic() -> None:

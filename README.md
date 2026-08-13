@@ -18,7 +18,7 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 | DeepSpeed ZeRO | benchmark adapter | ZeRO-2/ZeRO-3 与 DDP baseline 同表对比 |
 | Checkpoint/resume | DDP/FSDP implemented | DCP、READY/latest、RNG state、`checkpoint verify` |
 | Profiler | implemented + 2/8 卡实测 | PyTorch Profiler summary、跨 rank step/collective/straggler 分析 |
-| Fault tolerance | smoke + resume evidence | 精确恢复、半成品 checkpoint 跳过、配置不匹配拒绝 |
+| Fault tolerance | injected + resume evidence | NaN fail-fast、真实 rank crash、手工重启后精确恢复 |
 | LR scheduler / gradient health | implemented | constant/cosine、全局 gradient norm、梯度裁剪、全 rank fail-fast |
 | MoE | all-to-all microbenchmark + routing demo | equal/uneven split、MoE token dispatch 设计笔记 |
 | Tensor Parallel | toy correctness check + notes | Column/Row Parallel Linear、TP MLP、Sequence Parallel |
@@ -43,6 +43,10 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
   标为“未确定”。
 - 提供 `minitrainbench doctor` 检查 GPU、NCCL、网卡和 rendezvous 连通性。
 - 提供 `minitrainbench fault smoke`，把精确 resume、半成品 checkpoint 和配置不匹配这些常见故障边界写成可复现证据。
+- 实际向指定 worker 注入 `SIGKILL`，验证 `torchrun` 非零退出、READY checkpoint
+  未被修改，并在手工重启后通过 model/optimizer/scheduler/TrainState/RNG exact verify。
+- 每份正式结果记录源码 commit、容器 image/base digest、完整命令、PyTorch/CUDA/cuDNN/NCCL
+  和 driver；报告会警告缺失 provenance 或混用实验环境。
 - 核心 Runtime 默认使用 constant LR 以保持 benchmark 基线兼容；可切换 cosine scheduler，记录
   LR、全局 gradient norm 和裁剪步数，并在 loss/gradient 非有限时让所有 rank 一致 fail-fast。
 - 提供 toy tensor parallel correctness check，验证 Column/Row Parallel Linear
@@ -102,7 +106,7 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 项目不会把 PyTorch 安装到宿主机 Python 环境中。请使用 Docker 构建 GPU 镜像：
 
 ```bash
-docker build -t minitrainbench:gpu .
+scripts/build_images.sh
 docker run --rm --gpus all --ipc=host --network=host \
   -v "$PWD:/workspace" -w /workspace minitrainbench:gpu \
   python -m pytest
@@ -121,7 +125,12 @@ docker build --target gpu-deepspeed \
 benchmark 环境里编译 fused optimizer 扩展。默认 `docker build -t minitrainbench:gpu .`
 仍然只生成基础 GPU benchmark 镜像。
 
-默认基础镜像是 `pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime`。
+默认基础镜像锁定为官方
+`pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9...`。
+构建脚本会将源码 revision、构建时间和 base image 写入 OCI labels。benchmark 脚本默认
+拒绝脏工作区、私有 registry 镜像，以及 build revision 与当前 HEAD 不一致的镜像。
+仅调试时可设置 `ALLOW_UNVERIFIED_PROVENANCE=1` 绕过门禁；该模式产生的结果不能作为正式证据。
+
 如果需要使用内网镜像，可以覆盖 `BASE_IMAGE`：
 
 ```bash
@@ -129,6 +138,9 @@ docker build \
   --build-arg BASE_IMAGE=harbor.baai.ac.cn/flagscale/cuda12.8.1-torch2.7.1-python3.10-te2.9:20260209 \
   -t minitrainbench:gpu .
 ```
+
+内网镜像只用于调试，公开结果仍使用官方锁定镜像。代理通过 BuildKit secret 或当前 shell
+临时传入，不写入 Dockerfile、命令 manifest 或结果 JSON。
 
 CPU 开发和 CI 使用 `requirements-cpu.txt`，然后以 editable 模式安装项目：
 
@@ -174,6 +186,26 @@ deterministic synthetic iterator，报告中主指标渲染为 `mean ± std`。
 `results/megatron_smoke/report.md` 当前以 `not_run` 明确记录外部官方源码不可用，未填写
 任何性能数字；因此能力矩阵不将 Megatron 标为 `benchmarked`。runner 只有在外部官方
 源码、固定 ref 与容器环境校验通过后才会写入真实矩阵记录。
+
+运行真实 rank crash / 手工恢复 smoke：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_rank_crash_smoke.sh
+```
+
+脚本默认使用 2 卡 FSDP/BF16：生成连续训练 reference 和 step 2 READY checkpoint，随后
+让 rank 1 在恢复后的 step 2 开始前收到 `SIGKILL`。脚本要求 launcher 非零退出、失败前后
+checkpoint tree digest 相同，再手工重启到 step 4 并执行 `checkpoint verify`。结果写入
+`results/rank_crash/`，并明确记录 `recovery_mode=manual_restart`；项目没有实现自动弹性重启。
+
+完整重跑后生成证据索引：
+
+```bash
+scripts/generate_evidence_manifest.sh
+```
+
+`results/evidence_manifest.json` 保存每份 JSON 的 SHA256、benchmark 状态、启动命令、
+Git revision、image ID 和 base image。旧 JSON 仍可读取，但会标记为 provenance 不完整。
 
 运行显存压力矩阵：
 

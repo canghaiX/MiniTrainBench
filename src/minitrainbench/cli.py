@@ -5,7 +5,7 @@ import argparse
 from .communication import communication_benchmark
 from .deepspeed_benchmark import deepspeed_benchmark
 from .doctor import run_doctor
-from .fault_tolerance import fault_tolerance_smoke
+from .fault_tolerance import crash_worker, fault_tolerance_smoke
 from .moe_routing import moe_routing_benchmark
 from .profiler import profile_training
 from .report import write_report
@@ -263,6 +263,20 @@ def build_parser() -> argparse.ArgumentParser:
     fault_smoke_parser.add_argument("--checkpoint-dir", default=None)
     fault_smoke_parser.add_argument("--output", default=None)
 
+    crash_worker_parser = fault_subparsers.add_parser(
+        "crash-worker",
+        help="在指定 global step 杀死一个 rank，供故障恢复实验使用",
+    )
+    _add_common_distributed_arguments(crash_worker_parser)
+    _add_training_arguments(crash_worker_parser)
+    crash_worker_parser.add_argument("--checkpoint-dir", required=True)
+    crash_worker_parser.add_argument("--save-every", type=int, default=0)
+    crash_worker_parser.add_argument("--keep-last", type=int, default=0)
+    crash_worker_parser.add_argument("--resume", default="latest")
+    crash_worker_parser.add_argument("--crash-rank", type=int, required=True)
+    crash_worker_parser.add_argument("--crash-at-step", type=int, required=True)
+    crash_worker_parser.add_argument("--output", default=None)
+
     report_parser = subparsers.add_parser("report", help="将 JSON benchmark 结果渲染为 Markdown")
     report_parser.add_argument("--input", nargs="+", required=True)
     report_parser.add_argument("--output", default=None)
@@ -432,6 +446,17 @@ def main(argv: list[str] | None = None) -> None:
         _validate_runtime_stability(args)
         try:
             fault_tolerance_smoke(args)
+        except ValueError as error:
+            raise SystemExit(str(error)) from None
+    elif args.command == "fault" and args.fault_command == "crash-worker":
+        _validate_training_shape(args)
+        _validate_runtime_stability(args)
+        if args.crash_rank < 0 or args.crash_at_step < 0:
+            raise SystemExit("crash-rank 和 crash-at-step 不能为负数")
+        if args.repeat != 1:
+            raise SystemExit("crash-worker 只支持 repeat=1")
+        try:
+            crash_worker(args)
         except ValueError as error:
             raise SystemExit(str(error)) from None
     elif args.command == "report":

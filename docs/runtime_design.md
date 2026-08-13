@@ -163,5 +163,14 @@ RNG 时仅保证功能性恢复，并明确标记为非精确恢复。
 
 `minitrainbench doctor` 检查 GPU、CUDA/NCCL、网卡、rendezvous 端口和当前分布式环境。
 `minitrainbench fault smoke` 则把精确 resume、半成品 checkpoint、配置不匹配、NaN、
-rank crash 和 communication timeout 的检测/恢复边界写成 JSON。它不替代生产调度器，
-但能在本地和 CI 中验证 Runtime 对常见故障的处理契约。
+rank crash 和 communication timeout 的检测/恢复边界写成 JSON。
+
+`fault crash-worker` 会在指定 optimizer step 开始前向一个 rank 发送 `SIGKILL`。验证脚本
+要求 `torchrun` 非零退出、最后一份 READY checkpoint 的文件 digest 不变，再由用户态脚本
+手工重启并执行 exact checkpoint verify。该实验验证“恢复点不被故障污染”和“状态可精确重放”，
+不等价于 TorchElastic 或调度器自动拉起。communication timeout 仍是文档化诊断边界。
+
+正式 benchmark 通过共享 Docker launcher 注入源码 revision、image ID、官方 base digest 和
+完整命令。Runtime 统一采集 PyTorch、CUDA、cuDNN、NCCL、driver 和 GPU 信息，报告对缺失
+provenance 或混用 revision/image 的输入给出警告。结果不记录 hostname、GPU UUID、代理地址
+或私有 registry 地址。

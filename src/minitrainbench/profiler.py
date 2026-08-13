@@ -8,6 +8,7 @@ from typing import Any
 import torch
 import torch.distributed as dist
 
+from .provenance import enrich_payload
 from .runtime import StepMetrics, Trainer, _write_json
 
 
@@ -346,6 +347,7 @@ def profile_training(args: Any) -> dict[str, Any] | None:
                 else None,
             },
         }
+        enrich_payload(payload)
         summary_path = trace_dir / "profile_summary.json"
         summary_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

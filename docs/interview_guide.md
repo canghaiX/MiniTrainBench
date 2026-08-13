@@ -16,6 +16,13 @@ tensor parallel correctness check。
 单节点上完成 1/2/4/8 卡 DDP/FSDP 和 8 卡 NCCL 实测，并用 CPU/Gloo CI 覆盖主要
 Runtime 契约。
 
+故障恢复证据包含一次真实 worker `SIGKILL`：项目确认 launcher 失败时 READY checkpoint
+未变化，再手工重启并对 model、optimizer、scheduler、TrainState 和各 rank RNG 做 exact
+verify。面试时必须说 `manual restart`，不能说成实现了 TorchElastic 自动恢复。
+
+新实验结果能追到源码 commit、官方 base digest、容器 image ID、完整命令和软件栈。旧 JSON
+保持兼容，但报告会将其标记为 provenance 不完整，不能和锁定环境的新矩阵混成同一批结论。
+
 ## 架构与重点
 
 | 子系统 | 核心内容 | 面试中应强调的价值 |

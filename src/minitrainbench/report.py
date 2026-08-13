@@ -58,6 +58,50 @@ def _format_runtime_number(value: Any) -> str:
     return "-" if value in (None, "-") else f"{float(value):.6g}"
 
 
+def _provenance_warnings(payloads: list[dict[str, Any]]) -> list[str]:
+    warnings = []
+    incomplete = [
+        item.get("benchmark", "unknown")
+        for item in payloads
+        if not item.get("provenance", {}).get("complete", False)
+    ]
+    if incomplete:
+        warnings.append(
+            "存在缺少完整 provenance 的输入：" + ", ".join(sorted(set(incomplete)))
+        )
+    signatures = {
+        (
+            item.get("provenance", {}).get("git_revision"),
+            item.get("provenance", {}).get("image_id"),
+            item.get("provenance", {}).get("base_image"),
+        )
+        for item in payloads
+        if item.get("provenance", {}).get("complete", False)
+    }
+    if len(signatures) > 1:
+        warnings.append("输入结果混用了源码 revision、容器 image ID 或 base image。")
+    return warnings
+
+
+def _environment_rows(payloads: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+    rows = {
+        (
+            item.get("environment", {}).get("torch"),
+            item.get("environment", {}).get("cuda"),
+            item.get("environment", {}).get("cudnn"),
+            item.get("environment", {}).get("nccl"),
+            item.get("environment", {}).get("driver"),
+            item.get("environment", {}).get("gpu"),
+            item.get("provenance", {}).get("git_revision"),
+            item.get("provenance", {}).get("image_id"),
+            item.get("provenance", {}).get("base_image"),
+            item.get("provenance", {}).get("complete", False),
+        )
+        for item in payloads
+    }
+    return sorted(rows, key=lambda row: tuple(str(value) for value in row))
+
+
 def render_report(paths: list[str]) -> str:
     payloads = [_load(path) for path in paths]
     training = [item for item in payloads if item.get("benchmark") == "training"]
@@ -104,9 +148,43 @@ def render_report(paths: list[str]) -> str:
         if item["strategy"] == "ddp"
     }
 
+    provenance_warnings = _provenance_warnings(payloads)
+    environment_rows = _environment_rows(payloads)
+
     lines = [
         "## 生成的 Benchmark 结果",
         "",
+    ]
+    if provenance_warnings:
+        lines.extend(
+            [
+                "> **实验环境警告：** " + " ".join(provenance_warnings),
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "### 实验环境",
+            "",
+            (
+                "| PyTorch | CUDA | cuDNN | NCCL | Driver | GPU | Git revision | "
+                "Image ID | Base image | Provenance |"
+            ),
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in environment_rows:
+        torch_version, cuda, cudnn, nccl, driver, gpu, revision, image_id, base, complete = row
+        lines.append(
+            f"| {torch_version or '-'} | {cuda or '-'} | {cudnn or '-'} | "
+            f"{nccl or '-'} | {driver or '-'} | {gpu or '-'} | "
+            f"{str(revision)[:12] if revision else '-'} | "
+            f"{str(image_id)[:19] if image_id else '-'} | {base or '-'} | "
+            f"{'完整' if complete else '不完整'} |"
+        )
+    lines.extend(
+        [
+            "",
         "### 训练",
         "",
         (
@@ -118,7 +196,8 @@ def render_report(paths: list[str]) -> str:
             "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | "
             "---: | ---: | ---: | ---: |"
         ),
-    ]
+        ]
+    )
     for item in sorted(training, key=lambda row: (row["strategy"], row["world_size"])):
         tokens_per_sec = _metric(item, "tokens_per_sec")
         step_time_ms = _metric(item, "step_time_ms")
@@ -388,10 +467,10 @@ def render_report(paths: list[str]) -> str:
                 "### Failure Handling",
                 "",
                 (
-                    "| 故障类型 | 检测方式 | 自动恢复 | 恢复 checkpoint | "
-                    "Global step | Tokens seen | 状态 |"
+                    "| 故障类型 | 检测方式 | 自动恢复 | 恢复模式 | Checkpoint 未变 | "
+                    "恢复 checkpoint | Global step | Tokens seen | 状态 |"
                 ),
-                "| --- | --- | --- | --- | ---: | ---: | --- |",
+                "| --- | --- | --- | --- | --- | --- | ---: | ---: | --- |",
             ]
         )
         for item in fault_tolerance:
@@ -400,6 +479,8 @@ def render_report(paths: list[str]) -> str:
                 lines.append(
                     f"| {row.get('failure_type', '-')} | {row.get('detection', '-')} | "
                     f"{_format_optional_bool(row.get('auto_recovered'))} | "
+                    f"{row.get('recovery_mode', '-')} | "
+                    f"{_format_optional_bool(row.get('checkpoint_unchanged'))} | "
                     f"{recovered} | {row.get('global_step', '-')} | "
                     f"{row.get('tokens_seen', '-')} | {row.get('status', '-')} |"
                 )

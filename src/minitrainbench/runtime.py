@@ -5,6 +5,7 @@ import json
 import platform
 import statistics
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -17,11 +18,14 @@ from .checkpoint import CheckpointManager
 from .data import SyntheticTokenIterator
 from .distributed import DistributedContext, setup_distributed
 from .model import GPTConfig, MiniGPT, count_parameters
+from .provenance import enrich_payload
 from .scheduler import LearningRateScheduler, build_lr_scheduler
 from .strategy import TrainingStrategy, create_strategy
 
 
 def _write_json(path: str | None, payload: Any) -> None:
+    if isinstance(payload, dict):
+        enrich_payload(payload)
     if not path:
         return
     destination = Path(path)
@@ -298,6 +302,7 @@ class Trainer:
         self,
         args: Any,
         context: DistributedContext | None = None,
+        before_step_hook: Callable[[Trainer], None] | None = None,
     ) -> None:
         self.args = args
         self.strategy: TrainingStrategy = create_strategy(args.strategy)
@@ -328,6 +333,7 @@ class Trainer:
         self.inject_nonfinite_step: int | None = getattr(
             args, "inject_nonfinite_step", None
         )
+        self.before_step_hook = before_step_hook
         self._initialize_training_objects()
         self._maybe_resume(args.resume)
 
@@ -549,6 +555,8 @@ class Trainer:
         self.context.barrier()
         measured: list[StepMetrics] = []
         for step_index in range(warmup_steps + measured_steps):
+            if self.before_step_hook is not None:
+                self.before_step_hook(self)
             metrics = self._run_one_step()
             if (
                 self.checkpoint_manager.enabled

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/lib/docker_provenance.sh"
+
 IMAGE="${IMAGE:-minitrainbench:gpu}"
 NPROC="${NPROC:-2}"
 STRATEGY="${STRATEGY:-fsdp}"
@@ -20,8 +22,7 @@ DROPOUT="${DROPOUT:-0.1}"
 mkdir -p "${OUT_DIR}"
 
 docker_run() {
-  docker run --rm --gpus all --ipc=host --network=host \
-    -v "${PWD}:/workspace" -w /workspace "${IMAGE}" "$@"
+  minitrainbench_docker_run "${IMAGE}" "$@"
 }
 
 continuous_dir="${OUT_DIR}/continuous_${STRATEGY}_${NPROC}proc"

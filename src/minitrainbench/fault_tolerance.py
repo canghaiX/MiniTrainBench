@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import signal
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +21,23 @@ from .runtime import (
     _write_json,
 )
 from .verification import verify_checkpoints
+
+
+def crash_worker(args: Any) -> None:
+    """在指定 global step 杀死一个 worker，用于验证 launcher 与恢复边界。"""
+
+    def inject(trainer: Trainer) -> None:
+        if args.crash_rank >= trainer.context.world_size:
+            raise ValueError(
+                f"crash-rank={args.crash_rank} 超过 world size={trainer.context.world_size}"
+            )
+        if (
+            trainer.context.rank == args.crash_rank
+            and trainer.state.global_step == args.crash_at_step
+        ):
+            os.kill(os.getpid(), signal.SIGKILL)
+
+    Trainer(args, before_step_hook=inject).run()
 
 
 def _resolve_device_name(device_name: str) -> str:

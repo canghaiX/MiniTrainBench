@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/lib/docker_provenance.sh"
+
 IMAGE="${IMAGE:-minitrainbench:gpu}"
 NNODES="${NNODES:-2}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
@@ -12,14 +14,15 @@ COMMAND="${COMMAND:-python3 -m minitrainbench doctor --expected-world-size $((NN
 
 mkdir -p "${OUT_DIR}"
 
-docker run --rm --gpus all --ipc=host --network=host \
+MINITRAINBENCH_DOCKER_ARGS=(
   -e NCCL_DEBUG \
   -e NCCL_SOCKET_IFNAME \
   -e NCCL_IB_DISABLE \
   -e NCCL_IB_HCA \
   -e NCCL_ASYNC_ERROR_HANDLING \
-  -e TORCH_NCCL_ASYNC_ERROR_HANDLING \
-  -v "${PWD}:/workspace" -w /workspace "${IMAGE}" \
+  -e TORCH_NCCL_ASYNC_ERROR_HANDLING
+)
+minitrainbench_docker_run "${IMAGE}" \
   torchrun \
     --nnodes="${NNODES}" \
     --nproc_per_node="${NPROC_PER_NODE}" \

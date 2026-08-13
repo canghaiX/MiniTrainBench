@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/lib/docker_provenance.sh"
+
 IMAGE="${IMAGE:-minitrainbench:gpu}"
 DEEPSPEED_IMAGE="${DEEPSPEED_IMAGE:-minitrainbench:deepspeed}"
 OUT_DIR="${OUT_DIR:-results/memory_pressure}"
@@ -33,6 +35,18 @@ fi
 
 mkdir -p "${OUT_DIR}/logs" "${OUT_DIR}/records" "${OUT_DIR}/raw"
 
+probe_image() {
+  local image="$1"
+  local output="$2"
+  minitrainbench_docker_run "${image}" python3 -m minitrainbench doctor \
+    --skip-connectivity --output "/workspace/${output}"
+}
+
+gpu_evidence="${OUT_DIR}/raw/environment_gpu.json"
+deepspeed_evidence="${OUT_DIR}/raw/environment_deepspeed.json"
+probe_image "${IMAGE}" "${gpu_evidence}"
+probe_image "${DEEPSPEED_IMAGE}" "${deepspeed_evidence}"
+
 tier_config() {
   case "$1" in
     small)  echo "8192 512 8 6 256 2" ;;
@@ -55,10 +69,12 @@ run_case() {
   local log_path="${OUT_DIR}/logs/${benchmark_id}.log"
   local container_result_path="/workspace/${result_path}"
   local image="${IMAGE}"
+  local evidence_path="${gpu_evidence}"
   local -a benchmark_args
 
   if [[ "${strategy}" == zero* ]]; then
     image="${DEEPSPEED_IMAGE}"
+    evidence_path="${deepspeed_evidence}"
     benchmark_args=(
       torchrun --standalone --nproc_per_node="${WORLD_SIZE}"
       -m minitrainbench deepspeed --zero-stage "${strategy#zero}"
@@ -80,10 +96,8 @@ run_case() {
     benchmark_args+=(--activation-checkpointing)
   fi
 
-  local -a command=(
-    docker run --rm --gpus all --ipc=host --network=host
-    -v "${PWD}:/workspace" -w /workspace "${image}" "${benchmark_args[@]}"
-  )
+  local -a command
+  minitrainbench_docker_command "${image}" command "${benchmark_args[@]}"
   printf '运行 %s\n' "${benchmark_id}"
   rm -f "${result_path}" "${record_path}"
   printf '%q ' "${command[@]}" > "${OUT_DIR}/logs/${benchmark_id}.command.txt"
@@ -97,6 +111,7 @@ run_case() {
     --config-json "$(printf '{\"tier\":\"%s\",\"strategy\":\"%s\",\"world_size\":%s,\"precision\":\"bf16\",\"vocab_size\":%s,\"d_model\":%s,\"n_heads\":%s,\"n_layers\":%s,\"seq_length\":%s,\"batch_size\":%s,\"activation_checkpointing\":%s}' "${tier}" "${strategy}" "${WORLD_SIZE}" "${vocab_size}" "${d_model}" "${n_heads}" "${n_layers}" "${seq_length}" "${batch_size}" "${ACTIVATION_CHECKPOINTING}")" \
     --command "$(<"${OUT_DIR}/logs/${benchmark_id}.command.txt")" \
     --log "${log_path}" --returncode "${returncode}" --result "${result_path}" \
+    --evidence "${evidence_path}" \
     --output "${record_path}"
 
   if [[ ! -f "${record_path}" ]]; then

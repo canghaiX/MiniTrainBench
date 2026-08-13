@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/lib/docker_provenance.sh"
+
 IMAGE="${IMAGE:-minitrainbench:gpu}"
 NPROC="${NPROC:-2}"
 OUT_DIR="${OUT_DIR:-results/profiler}"
@@ -35,8 +37,7 @@ fi
 mkdir -p "${OUT_DIR}"
 
 docker_run() {
-  docker run --rm --gpus all --ipc=host --network=host \
-    -v "${PWD}:/workspace" -w /workspace "${IMAGE}" "$@"
+  minitrainbench_docker_run "${IMAGE}" "$@"
 }
 
 run_profile() {
@@ -88,6 +89,9 @@ for trace_dir in trace_dirs:
     summary_json = trace_dir / "profile_summary.json"
     if summary_json.is_file():
         payload["profiles"].append(json.loads(summary_json.read_text()))
+if payload["profiles"]:
+    payload["environment"] = payload["profiles"][0].get("environment")
+    payload["provenance"] = payload["profiles"][0].get("provenance")
 summary_md = out_dir / "profile_summary.md"
 summary_json = out_dir / "profile_summary.json"
 report = out_dir / "report.md"

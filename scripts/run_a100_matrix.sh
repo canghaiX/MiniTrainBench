@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/lib/docker_provenance.sh"
+
 IMAGE="${IMAGE:-minitrainbench:gpu}"
 GPUS="${GPUS:-1 2 4 8}"
 COMM_NPROC="${COMM_NPROC:-8}"
@@ -19,8 +21,7 @@ N_LAYERS="${N_LAYERS:-6}"
 mkdir -p "${OUT_DIR}"
 
 docker_run() {
-  docker run --rm --gpus all --ipc=host --network=host \
-    -v "${PWD}:/workspace" -w /workspace "${IMAGE}" "$@"
+  minitrainbench_docker_run "${IMAGE}" "$@"
 }
 
 run_train() {

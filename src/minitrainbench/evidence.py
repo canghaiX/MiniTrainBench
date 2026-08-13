@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import statistics
@@ -52,6 +53,7 @@ def training_record(
     output: str,
     returncode: int,
     result_path: str | None = None,
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     status, reason = classify_failure(returncode, output)
     record: dict[str, Any] = {
@@ -66,6 +68,8 @@ def training_record(
         "strategy": config.get("strategy"),
         "world_size": config.get("world_size"),
         "precision": config.get("precision"),
+        "environment": (evidence or {}).get("environment"),
+        "provenance": (evidence or {}).get("provenance"),
     }
     if status == "oom":
         record["failure_type"] = "cuda_oom"
@@ -89,6 +93,7 @@ def training_record(
                     "repeat_count": result.get("repeat_count"),
                     "model_config": result.get("model_config"),
                     "environment": result.get("environment"),
+                    "provenance": result.get("provenance"),
                     "source_result": result_path,
                 }
             )
@@ -257,6 +262,43 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def build_evidence_manifest(paths: Iterable[str]) -> dict[str, Any]:
+    entries = []
+    for raw_path in sorted(paths):
+        path = Path(raw_path)
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue
+        provenance = payload.get("provenance", {})
+        entries.append(
+            {
+                "path": path.as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "benchmark": payload.get("benchmark"),
+                "status": payload.get("status", "success"),
+                "world_size": payload.get("world_size"),
+                "strategy": payload.get("strategy"),
+                "command": provenance.get("command"),
+                "git_revision": provenance.get("git_revision"),
+                "image_ref": provenance.get("image_ref"),
+                "image_id": provenance.get("image_id"),
+                "base_image": provenance.get("base_image"),
+                "provenance_complete": provenance.get("complete", False),
+                "provenance_missing_fields": provenance.get("missing_fields", []),
+            }
+        )
+    complete = bool(entries) and all(row["provenance_complete"] for row in entries)
+    return {
+        "benchmark": "evidence_manifest",
+        "complete": complete,
+        "entry_count": len(entries),
+        "entries": entries,
+    }
+
+
 def _read_json(path: str) -> dict[str, Any]:
     return json.loads(Path(path).read_text())
 
@@ -283,6 +325,7 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_record.add_argument("--log", required=True)
     memory_record.add_argument("--returncode", required=True, type=int)
     memory_record.add_argument("--result", default=None)
+    memory_record.add_argument("--evidence", default=None)
     memory_record.add_argument("--output", required=True)
 
     memory_report = subparsers.add_parser("memory-report")
@@ -298,6 +341,10 @@ def _build_parser() -> argparse.ArgumentParser:
     megatron_report = subparsers.add_parser("megatron-report")
     megatron_report.add_argument("--input", nargs="+", required=True)
     megatron_report.add_argument("--output", required=True)
+
+    manifest = subparsers.add_parser("manifest")
+    manifest.add_argument("--input", nargs="+", required=True)
+    manifest.add_argument("--output", required=True)
     return parser
 
 
@@ -312,6 +359,7 @@ def main(argv: list[str] | None = None) -> None:
             output=Path(args.log).read_text(errors="replace"),
             returncode=args.returncode,
             result_path=args.result,
+            evidence=_read_json(args.evidence) if args.evidence else None,
         )
         _write(args.output, record)
     elif args.action == "memory-report":
@@ -353,6 +401,8 @@ def main(argv: list[str] | None = None) -> None:
         _write(args.output, record)
     elif args.action == "megatron-report":
         _write(args.output, render_megatron_report(_read_json(path) for path in args.input))
+    elif args.action == "manifest":
+        _write(args.output, build_evidence_manifest(args.input))
 
 
 if __name__ == "__main__":
