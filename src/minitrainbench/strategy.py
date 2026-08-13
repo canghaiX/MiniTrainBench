@@ -53,6 +53,14 @@ class TrainingStrategy(ABC):
             return nullcontext()
         return model.no_sync()  # type: ignore[no-any-return]
 
+    def clip_grad_norm(
+        self,
+        model: nn.Module,
+        max_norm: float,
+    ) -> torch.Tensor:
+        """返回裁剪前的全局梯度范数；max_norm=inf 时只计算不裁剪。"""
+        return torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
 
 class DDPStrategy(TrainingStrategy):
     def name(self) -> str:
@@ -118,6 +126,15 @@ class FSDPStrategy(TrainingStrategy):
         if context.device.type == "cuda":
             kwargs["device_id"] = context.device
         return FSDP(model, **kwargs)
+
+    def clip_grad_norm(
+        self,
+        model: nn.Module,
+        max_norm: float,
+    ) -> torch.Tensor:
+        if not hasattr(model, "clip_grad_norm_"):
+            raise TypeError("FSDP strategy 需要 FullyShardedDataParallel 模型")
+        return model.clip_grad_norm_(max_norm)  # type: ignore[no-any-return]
 
 
 _STRATEGIES: dict[str, type[TrainingStrategy]] = {

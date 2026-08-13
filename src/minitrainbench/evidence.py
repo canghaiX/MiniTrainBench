@@ -6,9 +6,9 @@ import argparse
 import json
 import re
 import statistics
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 OOM_PATTERNS = ("out of memory", "cuda out of memory", "cublas_status_alloc_failed")
 
@@ -150,8 +150,10 @@ def render_memory_pressure(records: Iterable[dict[str, Any]]) -> str:
         "",
         "每个档位独立初始化；OOM 和解析失败也是实验结果，不会被静默丢弃。",
         "",
-        "| 档位 | 策略 | GPU 数 | 模型配置 | Batch/Seq | AC | 目标参数量 | 状态 | "
-        "Tokens/sec | Step (ms) | 峰值显存 (MB) | 原因 |",
+        (
+            "| 档位 | 策略 | GPU 数 | 模型配置 | Batch/Seq | AC | 目标参数量 | 状态 | "
+            "Tokens/sec | Step (ms) | 峰值显存 (MB) | 原因 |"
+        ),
         "| --- | --- | ---: | --- | --- | --- | ---: | --- | ---: | ---: | ---: | --- |",
     ]
     for row in rows:
@@ -229,8 +231,10 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
     lines = [
         "# Megatron-LM 8 卡 Smoke / TP-PP-DP 矩阵",
         "",
-        "Megatron 源码由用户通过 `MEGATRON_DIR` 提供；本目录只保存命令、版本、"
-        "日志解析结果和失败原因。",
+        (
+            "Megatron 源码由用户通过 `MEGATRON_DIR` 提供；本目录只保存命令、版本、"
+            "日志解析结果和失败原因。"
+        ),
         "",
         "| 配置 | TP | PP | DP | 状态 | Tokens/sec | Step (ms) | Peak memory (MB) | 失败原因 |",
         "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |",

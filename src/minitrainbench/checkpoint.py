@@ -62,12 +62,13 @@ class CheckpointManager:
                 f"- Tokens seen：{metadata['tokens_seen']}",
                 f"- 配置指纹：`{metadata['config_fingerprint']}`",
                 f"- RNG 状态版本：{metadata.get('rng_state_version', '无（旧 checkpoint）')}",
+                f"- Scheduler 状态版本：{metadata.get('scheduler_state_version', '无（旧 checkpoint）')}",
                 f"- 生成时间：{metadata['created_at']}",
                 "",
                 (
                     "只有同 strategy、同 precision、同 world size、同模型配置和同关键训练参数的"
-                    "任务可以恢复这个 checkpoint。带有每 rank RNG 状态的 v2 checkpoint "
-                    "可以精确恢复随机训练路径。"
+                    "任务可以恢复这个 checkpoint。v3 checkpoint 同时保存 scheduler 与每 "
+                    "rank RNG 状态，可验证 optimizer step 时间轴和随机训练路径。"
                 ),
             ]
         ) + "\n"
@@ -78,11 +79,14 @@ class CheckpointManager:
         config: Any,
         path: Path,
     ) -> None:
-        is_legacy_gradient_sync = (
-            "gradient_sync_mode" not in metadata.get("config", {})
-            and config.gradient_sync_mode == "auto"
-            and metadata.get("config_fingerprint") == config.legacy_fingerprint()
-        )
+        format_version = int(metadata.get("format_version", 1))
+        stored_fingerprint = metadata.get("config_fingerprint")
+        fingerprint_matches = stored_fingerprint == config.fingerprint()
+        if format_version < 3 and config.uses_legacy_runtime_defaults():
+            fingerprint_matches = fingerprint_matches or stored_fingerprint in {
+                config.v2_fingerprint(),
+                config.legacy_fingerprint(),
+            }
         expected = {
             "strategy": config.strategy,
             "precision": config.precision,
@@ -93,7 +97,7 @@ class CheckpointManager:
             f"{key}: checkpoint={metadata.get(key)!r}, 当前={value!r}"
             for key, value in expected.items()
             if metadata.get(key) != value
-            and not (key == "config_fingerprint" and is_legacy_gradient_sync)
+            and not (key == "config_fingerprint" and fingerprint_matches)
         ]
         if mismatches:
             raise ValueError(
@@ -104,6 +108,7 @@ class CheckpointManager:
         self,
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
+        scheduler: Any,
         train_state: Any,
         config: Any,
         rng_state: dict[str, torch.Tensor],
@@ -126,6 +131,7 @@ class CheckpointManager:
         state = {
             "model": model_state,
             "optimizer": optimizer_state,
+            "scheduler": scheduler,
             "train_state": {
                 "global_step": torch.tensor(train_state.global_step, dtype=torch.int64),
                 "micro_step": torch.tensor(train_state.micro_step, dtype=torch.int64),
@@ -138,8 +144,9 @@ class CheckpointManager:
         self.context.barrier()
         if self.context.is_main:
             metadata = {
-                "format_version": 2,
+                "format_version": 3,
                 "rng_state_version": 1,
+                "scheduler_state_version": 1,
                 "path": str(final_path),
                 "step": train_state.global_step,
                 "strategy": config.strategy,
@@ -172,6 +179,7 @@ class CheckpointManager:
         path: str,
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
+        scheduler: Any,
         config: Any,
         current_state: Any,
     ) -> CheckpointLoad:
@@ -190,14 +198,15 @@ class CheckpointManager:
             "tokens_seen": torch.empty((), dtype=torch.int64, device=self.context.device),
             "seed": torch.empty((), dtype=torch.int64, device=self.context.device),
         }
-        dcp.load(
-            {
-                "model": model_state,
-                "optimizer": optimizer_state,
-                "train_state": train_state,
-            },
-            checkpoint_id=checkpoint_path,
-        )
+        checkpoint_state = {
+            "model": model_state,
+            "optimizer": optimizer_state,
+            "train_state": train_state,
+        }
+        format_version = int(metadata.get("format_version", 1))
+        if format_version >= 3:
+            checkpoint_state["scheduler"] = scheduler
+        dcp.load(checkpoint_state, checkpoint_id=checkpoint_path)
         set_state_dict(
             model,
             optimizer,
@@ -212,6 +221,10 @@ class CheckpointManager:
             config_fingerprint=str(metadata["config_fingerprint"]),
             resumed_from=str(checkpoint_path),
         )
+        if format_version < 3:
+            scheduler.load_state_dict(
+                {"completed_steps": torch.tensor(loaded_state.global_step)}
+            )
         rng_state, deterministic, determinism_reason = self._load_rng_state(checkpoint_path)
         self.context.barrier()
         return CheckpointLoad(

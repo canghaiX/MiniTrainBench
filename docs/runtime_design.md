@@ -136,6 +136,29 @@ MLP 或 token combine kernel。
 梯度聚合。它们仍不实现完整 TP 训练循环、pipeline schedule 或 Megatron optimizer。
 这样做的目的，是用最小代码证明切分语义正确，同时保留后续扩展空间。
 
+## 学习率与梯度健康
+
+benchmark 的 `warmup-steps` 是计时预热，不等于学习率 warmup。Runtime 另外提供
+`lr-warmup-steps`、`lr-decay-steps` 和 `min-learning-rate`，scheduler 以已完成的
+optimizer step 为时间轴，因此 `--steps 2` 后用 `--resume` 继续 `--steps 1` 不会重置 LR。
+默认 constant scheduler 保持原 benchmark 行为；stability smoke 使用 cosine scheduler
+展示训练框架常见的完整状态管理。
+
+Runtime 每步通过 strategy 计算全局 gradient norm。DDP 使用标准 utility，FSDP 使用
+`FullyShardedDataParallel.clip_grad_norm_`，因为分片梯度的 norm 需要全 rank collective。
+`--max-grad-norm 0` 只记录范数而不裁剪，大于 0 时记录裁剪步数。
+
+loss 或 gradient 出现 NaN/Inf 时，所有 rank 在预期 backward collective 完成后进行 finite
+flag reduction；任意 rank 失败则一起在 optimizer/scheduler step 前退出。这样可以避免一个
+rank 提前抛错导致其它 rank 永久等待 collective。
+
+## Checkpoint v3
+
+v3 checkpoint 在 DCP model/optimizer/train state/RNG 之外保存 scheduler completed steps。
+恢复时要求 scheduler completed steps 与 `TrainState.global_step` 一致，verify 也会比较
+scheduler digest。旧 v1/v2 checkpoint 仍可按 constant scheduler 从 global step 重建；缺少
+RNG 时仅保证功能性恢复，并明确标记为非精确恢复。
+
 ## 环境与故障边界
 
 `minitrainbench doctor` 检查 GPU、CUDA/NCCL、网卡、rendezvous 端口和当前分布式环境。

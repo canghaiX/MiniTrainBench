@@ -37,10 +37,29 @@ def _add_common_model_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=1337)
 
 
+def _add_runtime_stability_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--lr-scheduler",
+        choices=["constant", "cosine"],
+        default="constant",
+        help="按 optimizer step 推进的学习率调度器",
+    )
+    parser.add_argument("--lr-warmup-steps", type=int, default=0)
+    parser.add_argument("--lr-decay-steps", type=int, default=0)
+    parser.add_argument("--min-learning-rate", type=float, default=0.0)
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=0.0,
+        help="全局梯度范数裁剪阈值；0 表示只记录范数、不裁剪",
+    )
+
+
 def _add_training_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--strategy", choices=["ddp", "fsdp"], default="ddp")
     parser.add_argument("--precision", choices=["fp32", "bf16"], default="bf16")
     _add_common_model_arguments(parser)
+    _add_runtime_stability_arguments(parser)
     parser.add_argument(
         "--gradient-sync-mode",
         choices=["auto", "every", "last"],
@@ -61,6 +80,28 @@ def _validate_training_shape(args: argparse.Namespace) -> None:
         raise SystemExit(
             "steps、repeat 和 grad-accum-steps 必须为正数；warmup-steps 不能为负数"
         )
+
+
+def _validate_runtime_stability(args: argparse.Namespace) -> None:
+    if args.max_grad_norm < 0:
+        raise SystemExit("max-grad-norm 不能为负数；0 表示关闭梯度裁剪")
+    if args.lr_warmup_steps < 0 or args.lr_decay_steps < 0:
+        raise SystemExit("lr-warmup-steps 和 lr-decay-steps 不能为负数")
+    if args.min_learning_rate < 0 or args.learning_rate <= 0:
+        raise SystemExit("learning-rate 必须大于 0，min-learning-rate 不能为负数")
+    if args.lr_scheduler == "constant" and (
+        args.lr_warmup_steps or args.lr_decay_steps or args.min_learning_rate
+    ):
+        raise SystemExit(
+            "constant scheduler 要求 lr-warmup-steps、lr-decay-steps "
+            "和 min-learning-rate 均为 0"
+        )
+    if args.lr_scheduler == "cosine" and args.lr_decay_steps <= args.lr_warmup_steps:
+        raise SystemExit(
+            "cosine scheduler 要求 lr-decay-steps 大于 lr-warmup-steps"
+        )
+    if args.min_learning_rate > args.learning_rate:
+        raise SystemExit("min-learning-rate 不能大于 learning-rate")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile_parser.add_argument("--strategy", choices=["ddp", "fsdp"], default="ddp")
     profile_parser.add_argument("--precision", choices=["fp32", "bf16"], default="bf16")
     _add_common_model_arguments(profile_parser)
+    _add_runtime_stability_arguments(profile_parser)
     profile_parser.add_argument(
         "--gradient-sync-mode",
         choices=["auto", "every", "last"],
@@ -207,6 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     fault_smoke_parser.add_argument("--strategy", choices=["ddp", "fsdp"], default="ddp")
     fault_smoke_parser.add_argument("--precision", choices=["fp32", "bf16"], default="fp32")
     _add_common_model_arguments(fault_smoke_parser)
+    _add_runtime_stability_arguments(fault_smoke_parser)
     fault_smoke_parser.add_argument(
         "--gradient-sync-mode",
         choices=["auto", "every", "last"],
@@ -251,6 +294,7 @@ def main(argv: list[str] | None = None) -> None:
         run_doctor(args)
     elif args.command == "train":
         _validate_training_shape(args)
+        _validate_runtime_stability(args)
         if args.save_every < 0 or args.keep_last < 0:
             raise SystemExit("save-every 和 keep-last 不能为负数")
         if args.resume and not args.checkpoint_dir:
@@ -274,11 +318,13 @@ def main(argv: list[str] | None = None) -> None:
             or args.profile_wait < 0
             or args.profile_warmup < 0
             or args.profile_active < 1
+            or args.max_grad_norm < 0
         ):
             raise SystemExit(
                 "grad-accum-steps 和 profile-active 必须为正数；"
                 "profile-wait 和 profile-warmup 不能为负数"
             )
+        _validate_runtime_stability(args)
         try:
             profile_training(args)
         except ValueError as error:
@@ -376,12 +422,14 @@ def main(argv: list[str] | None = None) -> None:
             or args.resume_steps < 1
             or args.interrupted_steps + args.resume_steps != args.continuous_steps
             or args.keep_last < 0
+            or args.max_grad_norm < 0
         ):
             raise SystemExit(
                 "fault smoke 要求 continuous-steps>=2，interrupted/resume steps 为正，"
                 "且 interrupted-steps + resume-steps 等于 continuous-steps；"
                 "warmup-steps 和 keep-last 不能为负数"
             )
+        _validate_runtime_stability(args)
         try:
             fault_tolerance_smoke(args)
         except ValueError as error:

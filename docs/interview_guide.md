@@ -95,12 +95,12 @@ micro-batch 同步梯度。
 global step 仍不够。启用 dropout、随机 augmentation 或某些 activation checkpointing
 路径后，恢复进程的 PyTorch RNG 状态与连续训练不同，后续参数会漂移。
 
-**解决**：checkpoint v2 在临时目录中为每个 rank 保存 CPU RNG 和本地 CUDA RNG state；
+**解决**：checkpoint v3 在临时目录中保存 scheduler、每个 rank 的 CPU RNG 和本地 CUDA RNG state；
 所有 rank 完成 DCP 和 RNG 文件写入后，才写 `READY` 并更新 `latest`。
 
-**证据**：2 卡 FSDP、BF16、dropout 0.1 下，对比连续 3 step 与“2 step 保存 + resume
-1 step”，`checkpoint verify` 得到 `exact_match=true`。模型、optimizer、TrainState 和
-每 rank RNG digest 全部一致。
+**证据**：2 卡 FSDP、BF16、dropout 0.1 下，对比连续训练与中断 resume，`checkpoint verify`
+得到 `exact_match=true`。模型、optimizer、scheduler、TrainState 和每 rank RNG digest
+全部一致。
 
 ### 4. checkpoint 发布需要避免“看起来存在但不可用”
 
@@ -265,7 +265,7 @@ FSDP 的 `no_sync()` 会让未分片梯度在 accumulation window 内保留，�
 
 ### 精确 resume 至少要保存哪些状态？
 
-至少包括：模型参数、optimizer state、学习率调度器状态（本项目未实现 scheduler）、
+至少包括：模型参数、optimizer state、学习率调度器状态、
 训练进度、数据迭代位置或可复现数据 seed、每 rank RNG state，以及混合精度 scaler state
 （本项目 BF16 不使用 GradScaler）。如果这些状态有任意缺失，恢复可能能跑，但不保证与
 连续训练等价。
@@ -348,7 +348,8 @@ CUDA 计时要同步；多 rank 用 max step time；至少 repeat 多次报告�
 - 能解释 DDP `no_sync()` 为什么覆盖 forward/backward。
 - 能解释 FSDP `no_sync()` 的显存风险，而不是只说“它更快”。
 - 能画出 checkpoint 从临时目录到 READY/latest 的发布流程。
-- 能列出精确 resume 需要的状态，并说明本项目未实现 scheduler/scaler 的原因。
+- 能列出精确 resume 需要的状态，并说明本项目对 scheduler 做了 v3 checkpoint，
+  但没有引入 FP16 GradScaler，因为当前主线使用 BF16/FP32。
 - 能解释为什么 verify 要处理 `ShardedTensor`/`DTensor`。
 - 能说明 CPU/Gloo CI 覆盖什么、GPU 证据脚本覆盖什么。
 - 能解释为什么 repeat trial 要独立初始化，为什么 profiler 入口与 benchmark 分离。

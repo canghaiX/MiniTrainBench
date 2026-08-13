@@ -19,6 +19,7 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 | Checkpoint/resume | DDP/FSDP implemented | DCP、READY/latest、RNG state、`checkpoint verify` |
 | Profiler | implemented + 2/8 卡实测 | PyTorch Profiler summary、跨 rank step/collective/straggler 分析 |
 | Fault tolerance | smoke + resume evidence | 精确恢复、半成品 checkpoint 跳过、配置不匹配拒绝 |
+| LR scheduler / gradient health | implemented | constant/cosine、全局 gradient norm、梯度裁剪、全 rank fail-fast |
 | MoE | all-to-all microbenchmark + routing demo | equal/uneven split、MoE token dispatch 设计笔记 |
 | Tensor Parallel | toy correctness check + notes | Column/Row Parallel Linear、TP MLP、Sequence Parallel |
 | Megatron-LM | case study + external runner | 固定 ref 的外部源码 smoke/matrix；官方环境实测尚未产出 |
@@ -42,6 +43,8 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
   标为“未确定”。
 - 提供 `minitrainbench doctor` 检查 GPU、NCCL、网卡和 rendezvous 连通性。
 - 提供 `minitrainbench fault smoke`，把精确 resume、半成品 checkpoint 和配置不匹配这些常见故障边界写成可复现证据。
+- 核心 Runtime 默认使用 constant LR 以保持 benchmark 基线兼容；可切换 cosine scheduler，记录
+  LR、全局 gradient norm 和裁剪步数，并在 loss/gradient 非有限时让所有 rank 一致 fail-fast。
 - 提供 toy tensor parallel correctness check，验证 Column/Row Parallel Linear
   与单卡 reference 的 forward/backward 一致性，并补了 toy MLP 与 sequence parallel demo。
 - 提供 toy MoE routing demo，记录 top-1 dispatch、capacity、overflow 和 load imbalance。
@@ -74,8 +77,8 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 - `--gradient-sync-mode auto` 会让 DDP 只在 gradient accumulation 的最后一个
   micro-batch 同步梯度；FSDP 默认每个 micro-batch 同步以控制未分片梯度的显存峰值，
   也可显式切换到 `last`。
-- checkpoint v2 在 `READY` 前保存每个 rank 的 CPU/CUDA RNG 状态；`checkpoint verify`
-  可比较两份 DDP/FSDP checkpoint 的模型、optimizer、TrainState 和 RNG digest。
+- checkpoint v3 在 `READY` 前保存 scheduler、每个 rank 的 CPU/CUDA RNG 状态；`checkpoint verify`
+  可比较两份 DDP/FSDP checkpoint 的模型、optimizer、scheduler、TrainState 和 RNG digest。
 - `minitrainbench profile` 使用 PyTorch Profiler 采集每 rank trace，保留 step 拆分和
   collective 线索，便于从吞吐数字追到具体性能瓶颈。
 - DeepSpeed ZeRO 作为独立 adapter 接入 `minitrainbench deepspeed`，不接管现有
@@ -91,6 +94,8 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 - `minitrainbench doctor` 检查 GPU、NCCL、网卡和 rendezvous 环境。
 - `minitrainbench fault smoke` 把 resume、half checkpoint、config mismatch 和 NaN 等
   常见故障边界转成可复现 smoke。
+- `scripts/run_runtime_stability_smoke.sh` 对比连续训练与中断恢复的 scheduler 精确状态，
+  并实际注入 NaN 验证全 rank fail-fast 和 READY checkpoint 不推进。
 
 ## 环境
 
@@ -337,6 +342,19 @@ docker run --rm --gpus all --ipc=host --network=host \
 ```bash
 IMAGE=minitrainbench:gpu scripts/run_runtime_resume_smoke.sh
 ```
+
+运行 Runtime 稳定性闭环：连续 6 step、3+3 step resume、scheduler digest verify 和真实
+NaN all-rank fail-fast 注入：
+
+```bash
+IMAGE=minitrainbench:gpu NPROC=2 \
+  scripts/run_runtime_stability_smoke.sh
+```
+
+本机 A100 证据见 [`results/runtime_stability/report.md`](results/runtime_stability/report.md)：
+2 卡 FSDP/BF16 的连续训练与中断恢复 `exact_match=true`，model、optimizer、scheduler、
+TrainState 和 RNG 五类 digest 全部一致；NaN 注入后所有 rank 检测到，`global_step`、
+scheduler 和 latest READY checkpoint 均不推进。
 
 如需切到 DDP 或调整保留策略：
 
@@ -598,25 +616,25 @@ synthetic token 数据按 `seed + global_step + rank` 的确定性规则生成�
 Runtime 从 checkpoint 中的 `global_step` 继续生成下一个 batch，避免重复消费或
 跳过 synthetic step。
 
-checkpoint 使用 `torch.distributed.checkpoint` 保存模型、optimizer 和训练状态。
+checkpoint 使用 `torch.distributed.checkpoint` 保存模型、optimizer、scheduler 和训练状态。
 DDP 与 FSDP 走同一套保存/加载入口，FSDP 可保留 sharded model/optimizer state。
 保存目录采用 `step_00000010/` 形式；只有包含 `READY` 标记的目录会被视为可恢复。
 写入过程先进入临时目录，所有 rank 完成 DCP 保存后再由 rank 0 写入 `metadata.json`、
 中文 `metadata_zh.md`、READY 标记和 `latest` 指针，降低半成品 checkpoint 被误用的
-风险。v2 checkpoint 还会在发布前写入每个 rank 的 CPU/CUDA RNG 状态，使带 dropout
-或 activation checkpointing 的随机训练路径可以精确恢复。
+风险。v3 checkpoint 还会在发布前写入 scheduler 状态和每个 rank 的 CPU/CUDA RNG 状态，
+使带 dropout 或 activation checkpointing 的随机训练路径可以精确恢复。
 
-当前 v2 只支持同 strategy、同 precision、同 world size、同模型配置和同关键训练
+当前 v3 只支持同 strategy、同 precision、同 world size、同模型配置和同关键训练
 参数恢复；不匹配时会立即拒绝，并打印具体字段差异。跨 world size resharding、
 异构后端迁移和 DeepSpeed checkpoint 接管暂不放入这个最小 Runtime。
 
-旧版 v1 checkpoint 不含 RNG state 和 gradient sync mode。使用默认 `auto` 恢复旧
-checkpoint 时，Runtime 会保留旧版的每 micro-batch 同步语义，并标记
-`resume_deterministic=false`；显式切换新的同步模式则会被配置校验拒绝。
+旧版 v1/v2 checkpoint 缺少 scheduler 字段时，默认 constant scheduler 可以依据
+`global_step` 重建；缺少 RNG 的旧 checkpoint 仍可功能性恢复，但会标记为非精确恢复。
 
 `minitrainbench checkpoint verify` 会以保存时的 strategy 和模型配置重新构建训练
-状态，在相同 world size 下加载两份 checkpoint，再对模型、optimizer、TrainState 和
-每 rank RNG state 做分布式 digest 比较。任一项不一致会写出诊断 JSON 并以非零状态退出。
+状态，在相同 world size 下加载两份 checkpoint，再对模型、optimizer、scheduler、
+TrainState 和每 rank RNG state 做分布式 digest 比较。任一项不一致会写出诊断 JSON 并以
+非零状态退出。
 
 `--keep-last N` 用于控制 checkpoint retention。`N=3` 是默认值，`N=0` 表示保留
 所有历史 checkpoint。清理逻辑只删除带 `READY` 的旧 checkpoint，不会把临时目录

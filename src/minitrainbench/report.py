@@ -54,6 +54,10 @@ def _format_metric(item: dict[str, Any], name: str) -> str:
     return f"{summary['mean']:.2f} ± {summary['std']:.2f}"
 
 
+def _format_runtime_number(value: Any) -> str:
+    return "-" if value in (None, "-") else f"{float(value):.6g}"
+
+
 def render_report(paths: list[str]) -> str:
     payloads = [_load(path) for path in paths]
     training = [item for item in payloads if item.get("benchmark") == "training"]
@@ -206,6 +210,43 @@ def render_report(paths: list[str]) -> str:
             f"{latest_checkpoint} | {keep_last} | {ready_checkpoints} | "
             f"{resume_path} | {last_checkpoint} |"
         )
+    if training:
+        lines.extend(
+            [
+                "",
+                "#### 稳定性指标",
+                "",
+                (
+                    "| 策略 | GPU 数 | LR scheduler | 当前 LR | Grad norm mean | "
+                    "Grad norm max | 裁剪阈值 | 裁剪步数 | 非有限值策略 |"
+                ),
+                "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for item in sorted(training, key=lambda row: (row["strategy"], row["world_size"])):
+            runtime = item.get("runtime", {})
+            lr_scheduler = runtime.get(
+                "lr_scheduler", item.get("config", {}).get("lr_scheduler", "-")
+            )
+            learning_rate = runtime.get("learning_rate", item.get("learning_rate", "-"))
+            grad_norm = runtime.get("grad_norm", item.get("grad_norm", "-"))
+            grad_norm_max = item.get("grad_norm_max", grad_norm)
+            max_grad_norm = runtime.get(
+                "max_grad_norm", item.get("config", {}).get("max_grad_norm", "-")
+            )
+            clipped_steps = runtime.get("clipped_steps", item.get("clipped_steps", "-"))
+            nonfinite_policy = runtime.get(
+                "nonfinite_policy", item.get("nonfinite_policy", "-")
+            )
+            lines.append(
+                f"| {item['strategy']} | {item['world_size']} | {lr_scheduler} | "
+                f"{_format_runtime_number(learning_rate)} | "
+                f"{_format_runtime_number(grad_norm)} | "
+                f"{_format_runtime_number(grad_norm_max)} | "
+                f"{_format_runtime_number(max_grad_norm)} | "
+                f"{_format_runtime_number(clipped_steps)} | "
+                f"{nonfinite_policy} |"
+            )
     lines.extend(
         [
             "",

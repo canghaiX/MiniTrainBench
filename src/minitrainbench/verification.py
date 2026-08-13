@@ -13,6 +13,7 @@ from .checkpoint import CheckpointLoad, CheckpointManager
 from .distributed import DistributedContext, setup_distributed
 from .model import GPTConfig, MiniGPT
 from .runtime import TrainingConfig, TrainState, _write_json
+from .scheduler import build_lr_scheduler
 from .strategy import create_strategy
 
 
@@ -111,7 +112,7 @@ def _validate_pair(
 def _build_runtime(
     config: TrainingConfig,
     context: DistributedContext,
-) -> tuple[torch.nn.Module, torch.optim.Optimizer]:
+) -> tuple[torch.nn.Module, torch.optim.Optimizer, Any]:
     torch.manual_seed(config.seed + context.rank)
     if context.device.type == "cuda":
         torch.cuda.manual_seed_all(config.seed + context.rank)
@@ -122,7 +123,8 @@ def _build_runtime(
     ).to(context.device)
     model = strategy.wrap_model(model, context, config.precision)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-    return model, optimizer
+    scheduler = build_lr_scheduler(optimizer, config)
+    return model, optimizer, scheduler
 
 
 def _load_and_digest(
@@ -131,18 +133,26 @@ def _load_and_digest(
     config: TrainingConfig,
     context: DistributedContext,
 ) -> tuple[CheckpointLoad, dict[str, str]]:
-    model, optimizer = _build_runtime(config, context)
+    model, optimizer, scheduler = _build_runtime(config, context)
     current_state = TrainState(
         seed=config.seed,
         config_fingerprint=config.fingerprint(),
     )
-    loaded = manager.load(path, model, optimizer, config, current_state)
+    loaded = manager.load(
+        path,
+        model,
+        optimizer,
+        scheduler,
+        config,
+        current_state,
+    )
     from torch.distributed.checkpoint.state_dict import get_state_dict
 
     model_state, optimizer_state = get_state_dict(model, optimizer)
     return loaded, {
         "model": _distributed_digest(model_state, context),
         "optimizer": _distributed_digest(optimizer_state, context),
+        "scheduler": _distributed_digest(scheduler.state_dict(), context),
         "train_state": _distributed_digest(
             _state_for_comparison(loaded.train_state),
             context,
@@ -180,7 +190,7 @@ def verify_checkpoints(args: Any) -> dict[str, Any] | None:
         )
         matches = {
             name: left_digests[name] == right_digests[name]
-            for name in ("model", "optimizer", "train_state")
+            for name in ("model", "optimizer", "scheduler", "train_state")
         }
         matches["rng"] = (
             left_loaded.deterministic
@@ -209,6 +219,7 @@ def verify_checkpoints(args: Any) -> dict[str, Any] | None:
         if context.is_main:
             _write_json(args.output, payload)
             print(json.dumps(payload, indent=2, sort_keys=True))
+        context.barrier()
         return payload if context.is_main else None
     finally:
         context.close()

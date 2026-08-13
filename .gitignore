@@ -11,6 +11,16 @@ results/*features_smoke.json
 .runtime*_smoke*/
 results/runtime_determinism/*
 !results/runtime_determinism/verification.json
+results/runtime_stability/continuous*/
+results/runtime_stability/interrupted*/
+results/runtime_stability/nonfinite*/
+results/runtime_stability/*_half_checkpoint_probe/
+results/runtime_stability/interrupted.json
+results/runtime_stability/resumed.json
+results/runtime_stability/nonfinite_seed.json
+results/runtime_stability/fault_tolerance.json
+results/runtime_stability/fault/*
+!results/runtime_stability/fault/fault_tolerance.json
 results/**/rank_*.trace.json
 results/memory_pressure/logs/
 results/memory_pressure/raw/

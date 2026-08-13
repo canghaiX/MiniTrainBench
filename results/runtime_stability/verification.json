@@ -1,0 +1,37 @@
+{
+  "benchmark": "checkpoint_verification",
+  "config_fingerprint": "361f6389a1b51aecc546ad32af85829c2d28d5219625d3156339a52510cbaa76",
+  "digests": {
+    "left": {
+      "model": "76e86602eaaabea222a01ca6fcddb3c3f2b9e1769c4d15a21d14987dd5f06dcc",
+      "optimizer": "eada5b5d6e6df67461e67b60b3c8810e70db00f3f36b7baa9208343206aafc3e",
+      "rng": "08a1c8826fe60e47a4a5c047221ed5241bf2096a0ba41c7e6ae5cf9a912efea1",
+      "scheduler": "6f7b5abefc9d355b10a2ab353b93c421057c6e8ff651b2eef6ff124b230d9b29",
+      "train_state": "e39e1340bb1c08a7335f0614fc5c0646c224bd6f04e482d15bd7733aadfb8f9a"
+    },
+    "right": {
+      "model": "76e86602eaaabea222a01ca6fcddb3c3f2b9e1769c4d15a21d14987dd5f06dcc",
+      "optimizer": "eada5b5d6e6df67461e67b60b3c8810e70db00f3f36b7baa9208343206aafc3e",
+      "rng": "08a1c8826fe60e47a4a5c047221ed5241bf2096a0ba41c7e6ae5cf9a912efea1",
+      "scheduler": "6f7b5abefc9d355b10a2ab353b93c421057c6e8ff651b2eef6ff124b230d9b29",
+      "train_state": "e39e1340bb1c08a7335f0614fc5c0646c224bd6f04e482d15bd7733aadfb8f9a"
+    }
+  },
+  "exact_match": true,
+  "left": "/workspace/results/runtime_stability/continuous_fsdp_2proc/step_00000006",
+  "left_determinism_reason": "restored_rank_rng_state",
+  "left_deterministic": true,
+  "matches": {
+    "model": true,
+    "optimizer": true,
+    "rng": true,
+    "scheduler": true,
+    "train_state": true
+  },
+  "precision": "bf16",
+  "right": "/workspace/results/runtime_stability/interrupted_fsdp_2proc/step_00000006",
+  "right_determinism_reason": "restored_rank_rng_state",
+  "right_deterministic": true,
+  "strategy": "fsdp",
+  "world_size": 2
+}

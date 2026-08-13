@@ -9,7 +9,6 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
-
 import torch
 
 from minitrainbench.checkpoint import CheckpointManager
@@ -19,17 +18,18 @@ from minitrainbench.deepspeed_benchmark import build_deepspeed_config
 from minitrainbench.distributed import DistributedContext
 from minitrainbench.evidence import (
     classify_failure,
-    main as evidence_main,
     parse_megatron_log,
     render_megatron_report,
     render_memory_pressure,
     training_record,
     validate_megatron_config,
 )
+from minitrainbench.evidence import main as evidence_main
 from minitrainbench.model import GPTConfig, MiniGPT
 from minitrainbench.profiler import _rank_diagnostics
 from minitrainbench.report import render_report
 from minitrainbench.runtime import TrainingConfig
+from minitrainbench.scheduler import LearningRateScheduler
 from minitrainbench.strategy import create_strategy, registered_strategies
 from minitrainbench.verification import _validate_pair
 
@@ -101,6 +101,9 @@ def test_cpu_training_smoke(tmp_path) -> None:
     assert "summary" in result
     assert result["tokens_per_sec"] > 0
     assert "step_time_ms" in completed.stdout
+    assert result["runtime"]["lr_scheduler"] == "constant"
+    assert result["runtime"]["scheduler_completed_steps"] == 1
+    assert result["grad_norm"] > 0
 
 
 def test_strategy_registry_creates_supported_strategies() -> None:
@@ -111,6 +114,99 @@ def test_strategy_registry_creates_supported_strategies() -> None:
     assert create_strategy("fsdp").requires_process_group() is True
     with pytest.raises(ValueError, match="不支持的训练策略"):
         create_strategy("unknown")
+
+
+def test_lr_scheduler_sequence_and_validation() -> None:
+    parameter = torch.nn.Parameter(torch.ones(()))
+    optimizer = torch.optim.AdamW([parameter], lr=1.0)
+    scheduler = LearningRateScheduler(
+        optimizer,
+        schedule="cosine",
+        base_lr=1.0,
+        warmup_steps=2,
+        decay_steps=4,
+        min_lr=0.1,
+    )
+    values = [scheduler.current_lr]
+    for _ in range(5):
+        scheduler.step()
+        values.append(scheduler.current_lr)
+    assert values[0] == pytest.approx(0.5)
+    assert values[1] == pytest.approx(1.0)
+    assert values[-1] == pytest.approx(0.1)
+    assert scheduler.completed_steps == 5
+    with pytest.raises(ValueError, match="lr-decay-steps"):
+        LearningRateScheduler(
+            optimizer,
+            schedule="cosine",
+            base_lr=1.0,
+            warmup_steps=2,
+            decay_steps=2,
+        )
+
+
+def test_legacy_training_config_defaults() -> None:
+    config = TrainingConfig.from_dict(
+        {
+            "strategy": "ddp",
+            "precision": "fp32",
+            "backend": "gloo",
+            "device": "cpu",
+            "activation_checkpointing": False,
+            "grad_accum_steps": 1,
+            "batch_size": 1,
+            "seq_length": 8,
+            "vocab_size": 64,
+            "d_model": 16,
+            "n_heads": 4,
+            "n_layers": 1,
+            "dropout": 0.0,
+            "learning_rate": 3e-4,
+            "gradient_sync_mode": "auto",
+            "steps": 1,
+            "warmup_steps": 0,
+            "repeat": 1,
+            "seed": 1337,
+            "keep_last": 3,
+        }
+    )
+    assert config.lr_scheduler == "constant"
+    assert config.lr_warmup_steps == 0
+    assert config.max_grad_norm == 0.0
+
+
+def test_report_renders_runtime_stability_fields(tmp_path) -> None:
+    result = tmp_path / "training.json"
+    result.write_text(
+        json.dumps(
+            {
+                "benchmark": "training",
+                "strategy": "ddp",
+                "world_size": 1,
+                "precision": "fp32",
+                "tokens_per_sec": 10.0,
+                "step_time_ms": 100.0,
+                "data_time_ms": 1.0,
+                "forward_backward_ms": 90.0,
+                "optimizer_step_ms": 9.0,
+                "max_cuda_memory_mb": 10.0,
+                "repeat_count": 1,
+                "grad_norm": 2.0,
+                "runtime": {
+                    "lr_scheduler": "cosine",
+                    "learning_rate": 1e-4,
+                    "grad_norm": 2.0,
+                    "max_grad_norm": 1.0,
+                    "clipped_steps": 3,
+                    "nonfinite_policy": "all_rank_fail_fast",
+                },
+            }
+        )
+    )
+    report = render_report([str(result)])
+    assert "LR scheduler" in report
+    assert "all_rank_fail_fast" in report
+    assert "cosine" in report
 
 
 def test_deepspeed_config_builder_zero_stages() -> None:
@@ -505,8 +601,13 @@ def test_cpu_fault_tolerance_smoke(tmp_path) -> None:
     result = json.loads(output.read_text())
     assert result["benchmark"] == "fault_tolerance"
     assert result["verification"]["exact_match"] is True
-    failure_types = {row["failure_type"] for row in result["failure_handling"]}
+    failure_handling = result["failure_handling"]
+    failure_types = {row["failure_type"] for row in failure_handling}
     assert {"checkpoint_resume_exact", "config_mismatch", "half_checkpoint"} <= failure_types
+    nan_row = next(row for row in failure_handling if row["failure_type"] == "nan_loss")
+    assert nan_row["status"] == "detected"
+    assert nan_row["all_ranks_detected"] is True
+    assert nan_row["state_unchanged"] is True
 
 
 def test_repeat_conflicts_with_checkpoint_args(tmp_path) -> None:
@@ -838,6 +939,7 @@ def test_checkpoint_verify_exact_resume_and_legacy_diagnostic(tmp_path) -> None:
     assert verification["matches"] == {
         "model": True,
         "optimizer": True,
+        "scheduler": True,
         "train_state": True,
         "rng": True,
     }

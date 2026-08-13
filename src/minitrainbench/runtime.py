@@ -17,6 +17,7 @@ from .checkpoint import CheckpointManager
 from .data import SyntheticTokenIterator
 from .distributed import DistributedContext, setup_distributed
 from .model import GPTConfig, MiniGPT, count_parameters
+from .scheduler import LearningRateScheduler, build_lr_scheduler
 from .strategy import TrainingStrategy, create_strategy
 
 
@@ -61,6 +62,13 @@ def _reduce_mean(value: float, context: DistributedContext) -> float:
     return float(tensor.item() / context.world_size) if context.is_main else value
 
 
+def _all_ranks_true(value: torch.Tensor, context: DistributedContext) -> bool:
+    flag = value.to(device=context.device, dtype=torch.int32)
+    if context.world_size > 1:
+        dist.all_reduce(flag, op=dist.ReduceOp.MIN)
+    return bool(flag.item())
+
+
 def _summarize_repeats(repeats: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     metrics = [
         "tokens_per_sec",
@@ -69,6 +77,9 @@ def _summarize_repeats(repeats: list[dict[str, Any]]) -> dict[str, dict[str, flo
         "forward_backward_ms",
         "optimizer_step_ms",
         "max_cuda_memory_mb",
+        "grad_norm_mean",
+        "grad_norm_max",
+        "clipped_steps",
     ]
     summary: dict[str, dict[str, float]] = {}
     for metric in metrics:
@@ -98,6 +109,11 @@ class TrainingConfig:
     n_layers: int
     dropout: float
     learning_rate: float
+    lr_scheduler: str
+    lr_warmup_steps: int
+    lr_decay_steps: int
+    min_learning_rate: float
+    max_grad_norm: float
     gradient_sync_mode: str
     steps: int
     warmup_steps: int
@@ -128,6 +144,11 @@ class TrainingConfig:
             n_layers=args.n_layers,
             dropout=args.dropout,
             learning_rate=args.learning_rate,
+            lr_scheduler=getattr(args, "lr_scheduler", "constant"),
+            lr_warmup_steps=getattr(args, "lr_warmup_steps", 0),
+            lr_decay_steps=getattr(args, "lr_decay_steps", 0),
+            min_learning_rate=getattr(args, "min_learning_rate", 0.0),
+            max_grad_norm=getattr(args, "max_grad_norm", 0.0),
             gradient_sync_mode=args.gradient_sync_mode,
             steps=args.steps,
             warmup_steps=args.warmup_steps,
@@ -155,6 +176,11 @@ class TrainingConfig:
             "batch_size": self.batch_size,
             "model_config": self.model_dict(),
             "learning_rate": self.learning_rate,
+            "lr_scheduler": self.lr_scheduler,
+            "lr_warmup_steps": self.lr_warmup_steps,
+            "lr_decay_steps": self.lr_decay_steps,
+            "min_learning_rate": self.min_learning_rate,
+            "max_grad_norm": self.max_grad_norm,
             "gradient_sync_mode": self.gradient_sync_mode,
             "seed": self.seed,
         }
@@ -162,10 +188,39 @@ class TrainingConfig:
     def fingerprint(self) -> str:
         return self._fingerprint(self.fingerprint_dict())
 
+    def v2_fingerprint(self) -> str:
+        values = self.fingerprint_dict()
+        for name in (
+            "lr_scheduler",
+            "lr_warmup_steps",
+            "lr_decay_steps",
+            "min_learning_rate",
+            "max_grad_norm",
+        ):
+            values.pop(name)
+        return self._fingerprint(values)
+
     def legacy_fingerprint(self) -> str:
         values = self.fingerprint_dict()
+        for name in (
+            "lr_scheduler",
+            "lr_warmup_steps",
+            "lr_decay_steps",
+            "min_learning_rate",
+            "max_grad_norm",
+        ):
+            values.pop(name)
         values.pop("gradient_sync_mode")
         return self._fingerprint(values)
+
+    def uses_legacy_runtime_defaults(self) -> bool:
+        return (
+            self.lr_scheduler == "constant"
+            and self.lr_warmup_steps == 0
+            and self.lr_decay_steps == 0
+            and self.min_learning_rate == 0.0
+            and self.max_grad_norm == 0.0
+        )
 
     @staticmethod
     def _fingerprint(values: dict[str, Any]) -> str:
@@ -183,6 +238,11 @@ class TrainingConfig:
     def from_dict(cls, payload: dict[str, Any]) -> TrainingConfig:
         values = dict(payload)
         values.setdefault("gradient_sync_mode", "auto")
+        values.setdefault("lr_scheduler", "constant")
+        values.setdefault("lr_warmup_steps", 0)
+        values.setdefault("lr_decay_steps", 0)
+        values.setdefault("min_learning_rate", 0.0)
+        values.setdefault("max_grad_norm", 0.0)
         return cls(**values)
 
 
@@ -218,9 +278,17 @@ class StepMetrics:
     step_time_ms: float
     tokens_per_sec: float
     loss: float
+    learning_rate: float
+    grad_norm: float
+    gradient_clipped: bool
+    finite: bool
 
-    def to_dict(self) -> dict[str, float]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class NonFiniteTrainingError(RuntimeError):
+    """任意 rank 检测到非有限 loss 或 gradient 时同步抛出。"""
 
 
 class Trainer:
@@ -257,6 +325,9 @@ class Trainer:
         self.resume_deterministic: bool | None = None
         self.resume_determinism_reason = "not_resumed"
         self.parameter_count = 0
+        self.inject_nonfinite_step: int | None = getattr(
+            args, "inject_nonfinite_step", None
+        )
         self._initialize_training_objects()
         self._maybe_resume(args.resume)
 
@@ -271,6 +342,8 @@ class Trainer:
             del self.model
         if hasattr(self, "optimizer"):
             del self.optimizer
+        if hasattr(self, "scheduler"):
+            del self.scheduler
         gc.collect()
         if self.context.device.type == "cuda":
             torch.cuda.empty_cache()
@@ -301,6 +374,10 @@ class Trainer:
             self.model.parameters(),
             lr=self.config.learning_rate,
         )
+        self.scheduler: LearningRateScheduler = build_lr_scheduler(
+            self.optimizer,
+            self.config,
+        )
         self.context.barrier()
 
     def _maybe_resume(self, resume: str | None) -> None:
@@ -318,10 +395,17 @@ class Trainer:
             resume_target,
             self.model,
             self.optimizer,
+            self.scheduler,
             self.config,
             self.state,
         )
         self.state = loaded.train_state
+        if self.scheduler.completed_steps != self.state.global_step:
+            raise ValueError(
+                "scheduler completed_steps 与 checkpoint global_step 不一致："
+                f"scheduler={self.scheduler.completed_steps}，"
+                f"global_step={self.state.global_step}"
+            )
         self.iterator.load_state_dict(
             {"seed": self.state.seed, "rank": self.context.rank}
         )
@@ -383,6 +467,7 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
         forward_started = time.perf_counter()
         last_loss = 0.0
+        loss_is_finite = torch.ones((), dtype=torch.bool, device=self.context.device)
         for micro_index, input_ids in enumerate(inputs):
             sync_gradients = self._sync_gradients_for_microbatch(micro_index)
             with self.strategy.gradient_sync_context(self.model, sync_gradients):
@@ -393,13 +478,40 @@ class Trainer:
                 ):
                     _, loss = self.model(input_ids, input_ids)
                 assert loss is not None
+                if (
+                    self.inject_nonfinite_step == self.state.global_step
+                    and self.context.rank == 0
+                    and micro_index == 0
+                ):
+                    loss = loss * torch.full_like(loss, float("nan"))
+                loss_is_finite.logical_and_(torch.isfinite(loss.detach()))
                 (loss / self.config.grad_accum_steps).backward()
                 last_loss = float(loss.detach().item())
         _sync_device(self.context.device)
         forward_backward = time.perf_counter() - forward_started
 
         optimizer_started = time.perf_counter()
+        clip_limit = (
+            self.config.max_grad_norm
+            if self.config.max_grad_norm > 0
+            else float("inf")
+        )
+        grad_norm_tensor = self.strategy.clip_grad_norm(self.model, clip_limit)
+        grad_norm = float(grad_norm_tensor.detach().item())
+        local_finite = loss_is_finite.logical_and(torch.isfinite(grad_norm_tensor))
+        if not _all_ranks_true(local_finite, self.context):
+            self.optimizer.zero_grad(set_to_none=True)
+            self.state.micro_step = 0
+            raise NonFiniteTrainingError(
+                f"global_step={self.state.global_step} 检测到非有限 loss 或 gradient；"
+                "所有 rank 已在 optimizer step 前同步中止"
+            )
+        learning_rate = self.scheduler.current_lr
+        gradient_clipped = (
+            self.config.max_grad_norm > 0 and grad_norm > self.config.max_grad_norm
+        )
         self.optimizer.step()
+        self.scheduler.step()
         _sync_device(self.context.device)
         optimizer_step = time.perf_counter() - optimizer_started
         step_time = time.perf_counter() - started
@@ -425,6 +537,10 @@ class Trainer:
                 / step_time
             ),
             loss=last_loss,
+            learning_rate=learning_rate,
+            grad_norm=grad_norm,
+            gradient_clipped=gradient_clipped,
+            finite=True,
         )
 
     def _run_window(self, warmup_steps: int, measured_steps: int) -> dict[str, Any]:
@@ -442,6 +558,7 @@ class Trainer:
                 self.last_checkpoint = self.checkpoint_manager.save(
                     self.model,
                     self.optimizer,
+                    self.scheduler,
                     self.state,
                     self.config,
                     self._capture_rng_state(),
@@ -459,10 +576,16 @@ class Trainer:
             ),
             "step_time_ms": statistics.fmean(item.step_time_ms for item in measured),
             "loss": measured[-1].loss,
+            "learning_rate_start": measured[0].learning_rate,
+            "learning_rate_end": measured[-1].learning_rate,
+            "grad_norm_mean": statistics.fmean(item.grad_norm for item in measured),
+            "grad_norm_max": max(item.grad_norm for item in measured),
+            "clipped_steps": sum(item.gradient_clipped for item in measured),
         }
         result = {
             key: _reduce_max(value, self.context)
-            if key != "loss"
+            if key
+            not in {"loss", "learning_rate_start", "learning_rate_end"}
             else _reduce_mean(value, self.context)
             for key, value in local.items()
         }
@@ -498,6 +621,13 @@ class Trainer:
             "optimizer_step_ms": summary["optimizer_step_ms"]["mean"],
             "max_cuda_memory_mb": summary["max_cuda_memory_mb"]["mean"],
             "loss": repeats[-1]["loss"],
+            "learning_rate": repeats[-1]["learning_rate_end"],
+            "learning_rate_start": repeats[-1]["learning_rate_start"],
+            "learning_rate_end": repeats[-1]["learning_rate_end"],
+            "grad_norm": summary["grad_norm_mean"]["mean"],
+            "grad_norm_max": summary["grad_norm_max"]["max"],
+            "gradient_clipped": any(item["clipped_steps"] > 0 for item in repeats),
+            "clipped_steps": int(repeats[-1]["clipped_steps"]),
         }
         result: dict[str, Any] = {
             "benchmark": "training",
@@ -511,6 +641,7 @@ class Trainer:
             "resolved_gradient_sync_mode": self.resolved_gradient_sync_mode,
             "synchronized_microbatches_per_step": self._synchronized_microbatches_per_step(),
             "activation_checkpointing": self.config.activation_checkpointing,
+            "nonfinite_policy": "all_rank_fail_fast",
             **selected,
             "repeat_count": len(repeats),
             "parameters": self.parameter_count,
@@ -534,6 +665,17 @@ class Trainer:
                 "gradient_sync_mode": self.config.gradient_sync_mode,
                 "resolved_gradient_sync_mode": self.resolved_gradient_sync_mode,
                 "synchronized_microbatches_per_step": self._synchronized_microbatches_per_step(),
+                "lr_scheduler": self.config.lr_scheduler,
+                "learning_rate": selected["learning_rate_end"],
+                "next_learning_rate": self.scheduler.current_lr,
+                "lr_warmup_steps": self.config.lr_warmup_steps,
+                "lr_decay_steps": self.config.lr_decay_steps,
+                "min_learning_rate": self.config.min_learning_rate,
+                "max_grad_norm": self.config.max_grad_norm,
+                "grad_norm": selected["grad_norm"],
+                "clipped_steps": selected["clipped_steps"],
+                "nonfinite_policy": "all_rank_fail_fast",
+                "scheduler_completed_steps": self.scheduler.completed_steps,
                 "checkpoint_dir": self.args.checkpoint_dir,
                 "resume": self.resumed,
                 "resume_deterministic": self.resume_deterministic,

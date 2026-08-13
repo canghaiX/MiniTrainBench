@@ -28,6 +28,8 @@ def _summarize_steps(metrics: list[StepMetrics]) -> dict[str, dict[str, float]]:
         "optimizer_step_ms",
         "step_time_ms",
         "tokens_per_sec",
+        "grad_norm",
+        "learning_rate",
     ]
     summary: dict[str, dict[str, float]] = {}
     for field in fields:
@@ -205,8 +207,10 @@ def _render_markdown(payload: dict[str, Any]) -> str:
                     f"{diagnostics['collective_time_per_step_ms']['mean']:.2f} |"
                 ),
                 "",
-                "计算通信 overlap：未确定。`key_averages()` 不保留跨 CUDA stream 的时间关系；"
-                "请以每 rank Chrome trace 的实际时间线作为证据。",
+                (
+                    "计算通信 overlap：未确定。`key_averages()` 不保留跨 CUDA stream "
+                    "的时间关系；请以每 rank Chrome trace 的实际时间线作为证据。"
+                ),
             ]
         )
     lines.extend(["", "## Rank Top Ops", ""])
