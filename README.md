@@ -126,7 +126,7 @@ benchmark 环境里编译 fused optimizer 扩展。默认 `docker build -t minit
 仍然只生成基础 GPU benchmark 镜像。
 
 默认基础镜像锁定为官方
-`pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9...`。
+`pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b`。
 构建脚本会将源码 revision、构建时间和 base image 写入 OCI labels。benchmark 脚本默认
 拒绝脏工作区、私有 registry 镜像，以及 build revision 与当前 HEAD 不一致的镜像。
 仅调试时可设置 `ALLOW_UNVERIFIED_PROVENANCE=1` 绕过门禁；该模式产生的结果不能作为正式证据。

@@ -24,5 +24,9 @@ results/runtime_stability/fault/*
 results/**/rank_*.trace.json
 results/memory_pressure/logs/
 results/memory_pressure/raw/
+results/rank_crash/reference/
+results/rank_crash/interrupted/
+results/rank_crash/crash.log
+results/rank_crash/unexpected_crash_output.json
 results/megatron_smoke/logs/
 results/megatron_smoke/tensorboard/
