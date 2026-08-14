@@ -29,7 +29,8 @@ RUN ${PYTHON_BIN} -m pip install --no-build-isolation -e .
 FROM base AS gpu-deepspeed
 ARG PYTHON_BIN=python3
 ARG DEEPSPEED_VERSION=0.19.4
-ENV DS_BUILD_OPS=0
+ENV DS_BUILD_OPS=0 \
+    DS_IGNORE_CUDA_DETECTION=1
 LABEL io.minitrainbench.deepspeed.version="${DEEPSPEED_VERSION}"
 
 RUN --mount=type=secret,id=https_proxy,required=false \
