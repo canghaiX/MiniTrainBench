@@ -25,6 +25,7 @@ HIDDEN_SIZE="${HIDDEN_SIZE:-1024}"
 NUM_HEADS="${NUM_HEADS:-16}"
 VOCAB_SIZE="${VOCAB_SIZE:-32768}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-1200}"
+POST_RUN_CLEANUP_SECONDS="${POST_RUN_CLEANUP_SECONDS:-30}"
 TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-auto}"
 SEQUENCE_PARALLEL="${SEQUENCE_PARALLEL:-auto}"
 EVIDENCE_MODE="${EVIDENCE_MODE:-formal}"
@@ -250,7 +251,13 @@ timeout --signal=TERM --kill-after=30 "${TIMEOUT_SECONDS}" "${command[@]}" \
 returncode=$?
 set -e
 minitrainbench_memory_sampler_stop "${sampler_pid}" "${MEMORY_PATH}"
+cleanup_deadline=$(( $(date +%s) + POST_RUN_CLEANUP_SECONDS ))
 postexisting_compute_process_count="$(gpu_compute_process_count)"
+while (( postexisting_compute_process_count > 0 )) && \
+      (( $(date +%s) < cleanup_deadline )); do
+  sleep 1
+  postexisting_compute_process_count="$(gpu_compute_process_count)"
+done
 
 config_json="$(python3 - "${NAME}" "${TRIAL_INDEX}" "${TP}" "${PP}" "${DP}" \
   "${WORLD_SIZE}" "${MICRO_BATCH_SIZE}" "${GLOBAL_BATCH_SIZE}" "${SEQ_LENGTH}" \

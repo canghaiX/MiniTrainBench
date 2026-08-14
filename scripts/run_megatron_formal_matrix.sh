@@ -98,6 +98,7 @@ assert importlib.metadata.version("megatron-core") == "0.18.2"
 assert importlib.metadata.version("nvidia-resiliency-ext") == "0.6.0"
 print("NGC/TE/Apex/Megatron preflight passed")
 PY
+wait_for_idle_gpus
 
 rm -rf "${STAGING_DIR}" "${PUBLISH_DIR}"
 mkdir -p "${STAGING_DIR}/preflight"
