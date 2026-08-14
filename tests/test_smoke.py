@@ -31,7 +31,7 @@ from minitrainbench.evidence import main as evidence_main
 from minitrainbench.model import GPTConfig, MiniGPT
 from minitrainbench.profiler import _rank_diagnostics
 from minitrainbench.report import render_report
-from minitrainbench.runtime import TrainingConfig, _write_json
+from minitrainbench.runtime import TrainingConfig, _summarize_repeats, _write_json
 from minitrainbench.scheduler import LearningRateScheduler
 from minitrainbench.strategy import create_strategy, registered_strategies
 from minitrainbench.verification import _validate_pair
@@ -107,6 +107,34 @@ def test_cpu_training_smoke(tmp_path) -> None:
     assert result["runtime"]["lr_scheduler"] == "constant"
     assert result["runtime"]["scheduler_completed_steps"] == 1
     assert result["grad_norm"] > 0
+
+
+def test_repeat_summary_skips_adapter_specific_metrics() -> None:
+    repeats = [
+        {
+            "tokens_per_sec": 100.0,
+            "step_time_ms": 10.0,
+            "data_time_ms": 1.0,
+            "forward_backward_ms": 7.0,
+            "optimizer_step_ms": 2.0,
+            "max_cuda_memory_mb": 128.0,
+        },
+        {
+            "tokens_per_sec": 120.0,
+            "step_time_ms": 9.0,
+            "data_time_ms": 1.0,
+            "forward_backward_ms": 6.0,
+            "optimizer_step_ms": 2.0,
+            "max_cuda_memory_mb": 130.0,
+        },
+    ]
+
+    summary = _summarize_repeats(repeats)
+
+    assert summary["tokens_per_sec"]["mean"] == 110.0
+    assert summary["max_cuda_memory_mb"]["max"] == 130.0
+    assert "grad_norm_mean" not in summary
+    assert "clipped_steps" not in summary
 
 
 def test_strategy_registry_creates_supported_strategies() -> None:

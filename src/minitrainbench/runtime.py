@@ -87,6 +87,8 @@ def _summarize_repeats(repeats: list[dict[str, Any]]) -> dict[str, dict[str, flo
     ]
     summary: dict[str, dict[str, float]] = {}
     for metric in metrics:
+        if any(metric not in repeat for repeat in repeats):
+            continue
         values = [float(repeat[metric]) for repeat in repeats]
         summary[metric] = {
             "mean": statistics.fmean(values),
