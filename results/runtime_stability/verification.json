@@ -17,6 +17,16 @@
       "train_state": "e39e1340bb1c08a7335f0614fc5c0646c224bd6f04e482d15bd7733aadfb8f9a"
     }
   },
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
   "exact_match": true,
   "left": "/workspace/results/runtime_stability/continuous_fsdp_2proc/step_00000006",
   "left_determinism_reason": "restored_rank_rng_state",
@@ -29,6 +39,17 @@
     "train_state": true
   },
   "precision": "bf16",
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "torchrun --standalone --nproc_per_node=2 -m minitrainbench checkpoint verify --device cuda --left /workspace/results/runtime_stability/continuous_fsdp_2proc/step_00000006 --right /workspace/results/runtime_stability/interrupted_fsdp_2proc/step_00000006 --output /workspace/results/runtime_stability/verification.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+    "image_ref": "minitrainbench:gpu",
+    "missing_fields": []
+  },
   "right": "/workspace/results/runtime_stability/interrupted_fsdp_2proc/step_00000006",
   "right_determinism_reason": "restored_rank_rng_state",
   "right_deterministic": true,

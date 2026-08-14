@@ -4,13 +4,34 @@
   "benchmark": "communication",
   "device": "cuda:0",
   "dtype": "float32",
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
   "iters": 50,
   "operations": [
     "all_to_all"
   ],
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "torchrun --standalone --nproc_per_node=2 -m minitrainbench comm --device cuda --backend nccl --operations all_to_all --all-to-all-mode both --sizes 1024\\,1048576\\,16777216 --warmup 10 --iters 50 --output /workspace/results/moe_comm/all_to_all_2gpu.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+    "image_ref": "minitrainbench:gpu",
+    "missing_fields": []
+  },
   "results": [
     {
-      "bandwidth_gbps": 0.11936864982294804,
+      "bandwidth_gbps": 0.13575424691354682,
       "bytes": 8192,
       "elements": 1024,
       "elements_per_peer": 1024,
@@ -18,7 +39,7 @@
         1024,
         1024
       ],
-      "latency_ms": 0.06862773443572223,
+      "latency_ms": 0.06034433681634255,
       "operation": "all_to_all",
       "output_splits": [
         1024,
@@ -30,7 +51,7 @@
       "world_size": 2
     },
     {
-      "bandwidth_gbps": 0.05187806349424213,
+      "bandwidth_gbps": 0.1356381158640305,
       "bytes": 8196,
       "elements": 1024,
       "elements_per_peer": 1024,
@@ -38,7 +59,7 @@
         1024,
         1025
       ],
-      "latency_ms": 0.15798585081938654,
+      "latency_ms": 0.06042549284757115,
       "operation": "all_to_all",
       "output_splits": [
         1024,
@@ -50,7 +71,7 @@
       "world_size": 2
     },
     {
-      "bandwidth_gbps": 120.82756319977435,
+      "bandwidth_gbps": 118.1788097022334,
       "bytes": 8388608,
       "elements": 1048576,
       "elements_per_peer": 1048576,
@@ -58,7 +79,7 @@
         1048576,
         1048576
       ],
-      "latency_ms": 0.06942627805983648,
+      "latency_ms": 0.07098233618307859,
       "operation": "all_to_all",
       "output_splits": [
         1048576,
@@ -70,7 +91,7 @@
       "world_size": 2
     },
     {
-      "bandwidth_gbps": 125.73435565976021,
+      "bandwidth_gbps": 127.34127508742031,
       "bytes": 8388612,
       "elements": 1048576,
       "elements_per_peer": 1048576,
@@ -78,7 +99,7 @@
         1048576,
         1048577
       ],
-      "latency_ms": 0.06671694427495822,
+      "latency_ms": 0.06587504321942106,
       "operation": "all_to_all",
       "output_splits": [
         1048576,
@@ -90,7 +111,7 @@
       "world_size": 2
     },
     {
-      "bandwidth_gbps": 248.40283224510839,
+      "bandwidth_gbps": 251.75685065606385,
       "bytes": 134217728,
       "elements": 16777216,
       "elements_per_peer": 16777216,
@@ -98,7 +119,7 @@
         16777216,
         16777216
       ],
-      "latency_ms": 0.540322856977582,
+      "latency_ms": 0.5331244319677353,
       "operation": "all_to_all",
       "output_splits": [
         16777216,
@@ -110,7 +131,7 @@
       "world_size": 2
     },
     {
-      "bandwidth_gbps": 216.6618145837955,
+      "bandwidth_gbps": 217.02700004632334,
       "bytes": 134217732,
       "elements": 16777216,
       "elements_per_peer": 16777216,
@@ -118,7 +139,7 @@
         16777216,
         16777217
       ],
-      "latency_ms": 0.61948032816872,
+      "latency_ms": 0.6184379453770816,
       "operation": "all_to_all",
       "output_splits": [
         16777216,

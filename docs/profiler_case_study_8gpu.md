@@ -22,16 +22,16 @@
 ## 实测结论
 
 本次实测使用 PyTorch 2.10.0+cu130、8x A100-SXM4-40GB。DDP 的平均 step time 为
-99.11 ms，FSDP 为 199.49 ms；两者的 data time 均低于 0.23 ms，瓶颈不在 synthetic
-data 生成。DDP 的 optimizer step 为 2.84 ms，FSDP 为 1.13 ms，主要差异落在
+102.79 ms，FSDP 为 189.97 ms；两者的 data time 均低于 0.23 ms，瓶颈不在 synthetic
+data 生成。DDP 的 optimizer step 为 5.48 ms，FSDP 为 4.87 ms，主要差异落在
 forward/backward 及其伴随的 collective。
 
 | Strategy | Step (ms) | Forward/backward (ms) | Collective/step (ms) | Peak memory/rank (MB) | Rank max/p50 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| DDP | 99.11 | 95.87 | 7.33 | 569.65 | 1.0018 |
-| FSDP | 199.49 | 198.03 | 136.91 | 131.83-134.30 | 1.0007 |
+| DDP | 102.79 | 96.89 | 13.45 | 569.65 | 1.0010 |
+| FSDP | 189.97 | 184.84 | 104.54 | 131.83-134.30 | 1.0010 |
 
-DDP 的摘要记录到每 3 个 profile step 共 12 次 `nccl:all_reduce`；FSDP 记录到
+DDP 的摘要记录到每 3 个 profile step 共 15 次 `nccl:all_reduce`；FSDP 记录到
 156 次 all-gather 和 84 次 reduce-scatter。collective/step 是各 rank 的 NCCL event
 duration 累加后再除以 3，不等同于不可重叠的通信 wall time。两个策略的 rank
 `max/p50` 都接近 1.0，本轮没有观察到 step-time straggler。
@@ -41,7 +41,7 @@ duration 累加后再除以 3，不等同于不可重叠的通信 wall time。�
 duration 的差值推断 overlap。
 
 ZeRO-3 本轮不采集独立 trace。`results/zero_repeat3/zero3_8gpu.json` 的独立实验为
-46.8K tokens/sec、87.56 ms、约 2.16 GB；该实验没有使用本页 `grad_accum_steps=4`
+52.5K tokens/sec、77.98 ms、约 2.16 GB；该实验没有使用本页 `grad_accum_steps=4`
 的 Profiler 口径，只能说明既有 benchmark 结果，不能与上表直接做性能归因，也不能
 据此声称参数 gather 在时间线上与计算发生了重叠。
 

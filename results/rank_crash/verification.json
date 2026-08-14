@@ -1,0 +1,58 @@
+{
+  "benchmark": "checkpoint_verification",
+  "config_fingerprint": "0cf67f161d0815c0a706a0a3ef561a827b0abdc4fe9cd07c13d3808073280577",
+  "digests": {
+    "left": {
+      "model": "d079176433140448b9336908cb251f608025edd5e41c40961a292f6a3f73fe12",
+      "optimizer": "96e996809ef4735c2734349de88a1f446a07d15ed2fe1b9a18bcbbc382b61860",
+      "rng": "c19b8da3ab6c193b5898b72137bad2c73fcb72647d125cc6e91d613f6e0ea86e",
+      "scheduler": "c129d198001510bb4557e3ac5c9a540f7680987fa96024d0aaf9b9cab143a36f",
+      "train_state": "ef9a6a2ff946095f2a6566c4a047f63ba69381dcfbb43844f2800643ca890916"
+    },
+    "right": {
+      "model": "d079176433140448b9336908cb251f608025edd5e41c40961a292f6a3f73fe12",
+      "optimizer": "96e996809ef4735c2734349de88a1f446a07d15ed2fe1b9a18bcbbc382b61860",
+      "rng": "c19b8da3ab6c193b5898b72137bad2c73fcb72647d125cc6e91d613f6e0ea86e",
+      "scheduler": "c129d198001510bb4557e3ac5c9a540f7680987fa96024d0aaf9b9cab143a36f",
+      "train_state": "ef9a6a2ff946095f2a6566c4a047f63ba69381dcfbb43844f2800643ca890916"
+    }
+  },
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
+  "exact_match": true,
+  "left": "/workspace/results/rank_crash/reference/step_00000004",
+  "left_determinism_reason": "restored_rank_rng_state",
+  "left_deterministic": true,
+  "matches": {
+    "model": true,
+    "optimizer": true,
+    "rng": true,
+    "scheduler": true,
+    "train_state": true
+  },
+  "precision": "bf16",
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "torchrun --standalone --nproc_per_node=2 -m minitrainbench checkpoint verify --device cuda --left /workspace/results/rank_crash/reference/step_00000004 --right /workspace/results/rank_crash/interrupted/step_00000004 --output /workspace/results/rank_crash/verification.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+    "image_ref": "minitrainbench:gpu",
+    "missing_fields": []
+  },
+  "right": "/workspace/results/rank_crash/interrupted/step_00000004",
+  "right_determinism_reason": "restored_rank_rng_state",
+  "right_deterministic": true,
+  "strategy": "fsdp",
+  "world_size": 2
+}

@@ -1,0 +1,149 @@
+{
+  "backend": "gloo",
+  "benchmark": "fault_tolerance",
+  "continuous_checkpoint": "/workspace/results/fault_tolerance/continuous/step_00000003",
+  "device": "cpu",
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
+  "failure_handling": [
+    {
+      "auto_recovered": true,
+      "detection": "checkpoint verify",
+      "failure_type": "checkpoint_resume_exact",
+      "global_step": 3,
+      "recovered_checkpoint": "/workspace/results/fault_tolerance/interrupted/step_00000003",
+      "status": "ok",
+      "tokens_seen": 24
+    },
+    {
+      "auto_recovered": false,
+      "detection": "metadata fingerprint / config \u6821\u9a8c",
+      "failure_type": "config_mismatch",
+      "reason": "checkpoint /workspace/results/fault_tolerance/interrupted/step_00000003 \u4e0e\u5f53\u524d\u8bad\u7ec3\u914d\u7f6e\u4e0d\u5339\u914d\uff1aconfig_fingerprint: checkpoint='4cfba74c47a5353498b04ca402ee3afba09dee4a787a5bfc9049a53371dcb95d', \u5f53\u524d='e25497a9356b84cf791931eba151a62eee79125242e32014b91084bdf5f5b73d'",
+      "recovered_checkpoint": null,
+      "status": "rejected"
+    },
+    {
+      "all_ranks_detected": true,
+      "auto_recovered": false,
+      "detection": "all-rank loss/gradient finite reduction",
+      "failure_type": "nan_loss",
+      "global_step": 1,
+      "reason": "global_step=1 \u68c0\u6d4b\u5230\u975e\u6709\u9650 loss \u6216 gradient\uff1b\u6240\u6709 rank \u5df2\u5728 optimizer step \u524d\u540c\u6b65\u4e2d\u6b62",
+      "recovered_checkpoint": "step_00000001",
+      "scheduler_completed_steps": 1,
+      "state_unchanged": true,
+      "status": "detected",
+      "tokens_seen": 8
+    },
+    {
+      "auto_recovered": false,
+      "detection": "launcher exit code / \u8fdb\u7a0b\u7ec4\u9000\u51fa",
+      "failure_type": "rank_crash",
+      "reason": "rank crash \u9700\u8981 launcher \u6216\u8c03\u5ea6\u5668\u91cd\u542f\uff0c\u4e0d\u5728\u5355\u8fdb\u7a0b smoke \u4e2d\u81ea\u52a8\u4fee\u590d\u3002",
+      "recovered_checkpoint": null,
+      "status": "documented_not_injected"
+    },
+    {
+      "auto_recovered": false,
+      "detection": "NCCL watchdog / doctor connectivity",
+      "failure_type": "communication_timeout",
+      "reason": "\u901a\u4fe1 hang \u4f9d\u8d56 NCCL watchdog\u3001\u8d85\u65f6\u548c\u591a\u673a\u8bca\u65ad\u7b56\u7565\u3002",
+      "recovered_checkpoint": null,
+      "status": "documented_not_injected"
+    },
+    {
+      "auto_recovered": true,
+      "detection": "latest/READY \u626b\u63cf",
+      "failure_type": "half_checkpoint",
+      "recovered_checkpoint": "step_00000003",
+      "status": "ok"
+    }
+  ],
+  "interrupted_checkpoint": "/workspace/results/fault_tolerance/interrupted/step_00000003",
+  "precision": "fp32",
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "python3 -m minitrainbench fault smoke --device cpu --backend gloo --strategy ddp --precision fp32 --batch-size 1 --seq-length 8 --vocab-size 64 --d-model 16 --n-heads 4 --n-layers 1 --dropout 0.2 --checkpoint-dir /workspace/results/fault_tolerance/continuous --output /workspace/results/fault_tolerance/fault_tolerance.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+    "image_ref": "minitrainbench:gpu",
+    "missing_fields": []
+  },
+  "resume_checkpoint": "/workspace/results/fault_tolerance/interrupted/step_00000002",
+  "strategy": "ddp",
+  "training_outputs": {
+    "continuous": "/workspace/results/fault_tolerance/continuous.json",
+    "interrupted": "/workspace/results/fault_tolerance/interrupted.json",
+    "resumed": "/workspace/results/fault_tolerance/resumed.json"
+  },
+  "verification": {
+    "benchmark": "checkpoint_verification",
+    "config_fingerprint": "4cfba74c47a5353498b04ca402ee3afba09dee4a787a5bfc9049a53371dcb95d",
+    "digests": {
+      "left": {
+        "model": "931debd1b090bb1555c281d2e7ce1fbb507bb0a80014a491ab466ab648fffebe",
+        "optimizer": "5e91be0ddb84781b1296c40875fe14900230bf424a6d4f63f21ca173b2b476ce",
+        "rng": "11025e1ed49d81a0a3c69ecd324992bb4a64524c08987dbcc49d102149717300",
+        "scheduler": "936e3e5b3ade5a90e281834f0031f1e89941e4e097d44cfe72cfd0f7045c0502",
+        "train_state": "788b8a1250d38209f618127e42296929942439b5dde14bb8f3c1769febe5da31"
+      },
+      "right": {
+        "model": "931debd1b090bb1555c281d2e7ce1fbb507bb0a80014a491ab466ab648fffebe",
+        "optimizer": "5e91be0ddb84781b1296c40875fe14900230bf424a6d4f63f21ca173b2b476ce",
+        "rng": "11025e1ed49d81a0a3c69ecd324992bb4a64524c08987dbcc49d102149717300",
+        "scheduler": "936e3e5b3ade5a90e281834f0031f1e89941e4e097d44cfe72cfd0f7045c0502",
+        "train_state": "788b8a1250d38209f618127e42296929942439b5dde14bb8f3c1769febe5da31"
+      }
+    },
+    "environment": {
+      "cuda": "13.0",
+      "cudnn": "91501",
+      "driver": "580.173.02",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "gpu_count": 8,
+      "nccl": "2.28.9",
+      "python": "3.12.3",
+      "torch": "2.10.0+cu130"
+    },
+    "exact_match": true,
+    "left": "/workspace/results/fault_tolerance/continuous/step_00000003",
+    "left_determinism_reason": "restored_rank_rng_state",
+    "left_deterministic": true,
+    "matches": {
+      "model": true,
+      "optimizer": true,
+      "rng": true,
+      "scheduler": true,
+      "train_state": true
+    },
+    "precision": "fp32",
+    "provenance": {
+      "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+      "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+      "command": "python3 -m minitrainbench fault smoke --device cpu --backend gloo --strategy ddp --precision fp32 --batch-size 1 --seq-length 8 --vocab-size 64 --d-model 16 --n-heads 4 --n-layers 1 --dropout 0.2 --checkpoint-dir /workspace/results/fault_tolerance/continuous --output /workspace/results/fault_tolerance/fault_tolerance.json",
+      "complete": true,
+      "git_dirty": false,
+      "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+      "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+      "image_ref": "minitrainbench:gpu",
+      "missing_fields": []
+    },
+    "right": "/workspace/results/fault_tolerance/interrupted/step_00000003",
+    "right_determinism_reason": "restored_rank_rng_state",
+    "right_deterministic": true,
+    "strategy": "ddp",
+    "world_size": 1
+  }
+}

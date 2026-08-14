@@ -1,30 +1,45 @@
 {
-  "collective_time_ms": 559.9955199999993,
+  "collective_time_ms": 89.80500200000012,
   "collectives": [
     {
       "calls": 156,
       "name": "ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
-      "time_ms": 297.84989899999925
+      "time_ms": 53.97253800000019
     },
     {
       "calls": 156,
       "name": "nccl:_all_gather_base",
-      "time_ms": 297.84989899999925
+      "time_ms": 53.97253800000019
     },
     {
       "calls": 84,
       "name": "ncclDevKernel_ReduceScatter_Sum_bf16_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
-      "time_ms": 262.14562100000006
+      "time_ms": 28.37346699999992
     },
     {
       "calls": 84,
       "name": "nccl:_reduce_scatter_base",
-      "time_ms": 262.14562100000006
+      "time_ms": 28.37346699999992
+    },
+    {
+      "calls": 6,
+      "name": "nccl:all_reduce",
+      "time_ms": 7.458997000000003
+    },
+    {
+      "calls": 3,
+      "name": "ncclDevKernel_AllReduce_Sum_f32_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
+      "time_ms": 4.555258000000002
+    },
+    {
+      "calls": 3,
+      "name": "ncclDevKernel_AllReduce_Sum_u32_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
+      "time_ms": 2.903739000000001
     },
     {
       "calls": 84,
       "name": "c10d::_reduce_scatter_base_",
-      "time_ms": 1.3049199999998236
+      "time_ms": 1.3513380000002362
     },
     {
       "calls": 156,
@@ -35,148 +50,165 @@
       "calls": 84,
       "name": "nccl:_reduce_scatter_base",
       "time_ms": 0.0
+    },
+    {
+      "calls": 6,
+      "name": "nccl:all_reduce",
+      "time_ms": 0.0
     }
   ],
-  "max_cuda_memory_mb": 134.29638671875,
+  "max_cuda_memory_mb": 134.29736328125,
   "measured_step_count": 3,
   "rank": 4,
   "step_breakdown": {
     "data_time_ms": {
-      "max": 0.22353511303663254,
-      "mean": 0.2088529678682486,
-      "min": 0.19368669018149376,
-      "std": 0.01219037530065696
+      "max": 0.2184547483921051,
+      "mean": 0.20436119909087816,
+      "min": 0.19156374037265778,
+      "std": 0.011016395846646451
     },
     "forward_backward_ms": {
-      "max": 203.11329932883382,
-      "mean": 199.035436535875,
-      "min": 194.9119041673839,
-      "std": 3.3483612838880323
+      "max": 186.39981281012297,
+      "mean": 184.6017266313235,
+      "min": 181.93369498476386,
+      "std": 1.9242584623961734
+    },
+    "grad_norm": {
+      "max": 147.7776641845703,
+      "mean": 103.58126576741536,
+      "min": 74.15234375,
+      "std": 31.81960319976705
+    },
+    "learning_rate": {
+      "max": 0.0003,
+      "mean": 0.0003,
+      "min": 0.0003,
+      "std": 0.0
     },
     "optimizer_step_ms": {
-      "max": 0.8548018522560596,
-      "mean": 0.7662170877059301,
-      "min": 0.6912611424922943,
-      "std": 0.0674571442961585
+      "max": 5.032031796872616,
+      "mean": 4.905799403786659,
+      "min": 4.806144163012505,
+      "std": 0.09411363539708599
     },
     "step_time_ms": {
-      "max": 204.13166098296642,
-      "mean": 200.08950711538395,
-      "min": 196.06422213837504,
-      "std": 3.293539716617706
+      "max": 191.54243497177958,
+      "mean": 189.79436329876384,
+      "min": 187.04234203323722,
+      "std": 1.9695422822078497
     },
     "tokens_per_sec": {
-      "max": 41782.22783664417,
-      "mean": 40952.77309085644,
-      "min": 40130.962343384715,
-      "std": 674.1479834279894
+      "max": 43797.56963556568,
+      "mean": 43167.18348308774,
+      "min": 42768.59068439298,
+      "std": 450.9216780718167
     }
   },
   "top_cpu_ops": [
     {
       "calls": 3,
       "name": "ProfilerStep*",
-      "self_cpu_time_ms": 337.46620800000034,
+      "self_cpu_time_ms": 344.24855800000006,
       "self_cuda_time_ms": 0.0,
-      "time_ms": 337.46620800000034
-    },
-    {
-      "calls": 12,
-      "name": "cudaStreamSynchronize",
-      "self_cpu_time_ms": 55.54373699999989,
-      "self_cuda_time_ms": 0.0,
-      "time_ms": 55.54373699999989
+      "time_ms": 344.24855800000006
     },
     {
       "calls": 84,
       "name": "FullyShardedDataParallel._pre_forward",
-      "self_cpu_time_ms": 46.772447999998995,
+      "self_cpu_time_ms": 45.84504900000095,
       "self_cuda_time_ms": 0.0,
-      "time_ms": 46.772447999998995
+      "time_ms": 45.84504900000095
+    },
+    {
+      "calls": 5262,
+      "name": "cudaLaunchKernel",
+      "self_cpu_time_ms": 43.79819800000129,
+      "self_cuda_time_ms": 0.0,
+      "time_ms": 43.79819800000129
     },
     {
       "calls": 84,
       "name": "FullyShardedDataParallel._post_backward_hook",
-      "self_cpu_time_ms": 41.98527099999889,
+      "self_cpu_time_ms": 40.67833699999984,
       "self_cuda_time_ms": 0.0,
-      "time_ms": 41.98527099999889
-    },
-    {
-      "calls": 5115,
-      "name": "cudaLaunchKernel",
-      "self_cpu_time_ms": 41.326851000002264,
-      "self_cuda_time_ms": 0.0,
-      "time_ms": 41.326851000002264
+      "time_ms": 40.67833699999984
     },
     {
       "calls": 84,
       "name": "FullyShardedDataParallel._pre_backward_prefetch",
-      "self_cpu_time_ms": 39.4131470000003,
+      "self_cpu_time_ms": 37.90891399999847,
       "self_cuda_time_ms": 0.0,
-      "time_ms": 39.4131470000003
+      "time_ms": 37.90891399999847
     },
     {
       "calls": 84,
       "name": "FullyShardedDataParallel.forward",
-      "self_cpu_time_ms": 27.23032899999921,
+      "self_cpu_time_ms": 30.31833599999945,
       "self_cuda_time_ms": 0.0,
-      "time_ms": 27.23032899999921
+      "time_ms": 30.31833599999945
     },
     {
       "calls": 84,
       "name": "FullyShardedDataParallel._post_forward",
-      "self_cpu_time_ms": 23.79521799999928,
+      "self_cpu_time_ms": 24.235493000000382,
       "self_cuda_time_ms": 0.0,
-      "time_ms": 23.79521799999928
+      "time_ms": 24.235493000000382
     },
     {
-      "calls": 612,
-      "name": "aten::mm",
-      "self_cpu_time_ms": 13.601085999998565,
-      "self_cuda_time_ms": 6.940214999999967,
-      "time_ms": 13.601085999998565
-    },
-    {
-      "calls": 240,
+      "calls": 246,
       "name": "record_param_comms",
-      "self_cpu_time_ms": 13.137099999999908,
-      "self_cuda_time_ms": 559.9955199999994,
-      "time_ms": 13.137099999999908
+      "self_cpu_time_ms": 14.276614999998335,
+      "self_cuda_time_ms": 89.80500200000013,
+      "time_ms": 14.276614999998335
     },
     {
-      "calls": 1884,
+      "calls": 1887,
       "name": "aten::copy_",
-      "self_cpu_time_ms": 13.042191999997488,
-      "self_cuda_time_ms": 7.516957999999516,
-      "time_ms": 13.042191999997488
+      "self_cpu_time_ms": 13.235629999997574,
+      "self_cuda_time_ms": 6.462382999997585,
+      "time_ms": 13.235629999997574
     },
     {
-      "calls": 1833,
-      "name": "aten::empty_strided",
-      "self_cpu_time_ms": 13.026544999999809,
+      "calls": 5511,
+      "name": "aten::view",
+      "self_cpu_time_ms": 12.896229000000226,
       "self_cuda_time_ms": 0.0,
-      "time_ms": 13.026544999999809
-    },
-    {
-      "calls": 9928,
-      "name": "cudaEventQuery",
-      "self_cpu_time_ms": 12.501805999997178,
-      "self_cuda_time_ms": 0.0,
-      "time_ms": 12.501805999997178
-    },
-    {
-      "calls": 1983,
-      "name": "aten::empty",
-      "self_cpu_time_ms": 11.596131000000401,
-      "self_cuda_time_ms": 0.0,
-      "time_ms": 11.596131000000401
+      "time_ms": 12.896229000000226
     },
     {
       "calls": 84,
       "name": "FullyShardedDataParallel._pre_backward_hook",
-      "self_cpu_time_ms": 11.197594000000455,
+      "self_cpu_time_ms": 12.625477999999934,
       "self_cuda_time_ms": 0.0,
-      "time_ms": 11.197594000000455
+      "time_ms": 12.625477999999934
+    },
+    {
+      "calls": 612,
+      "name": "aten::mm",
+      "self_cpu_time_ms": 12.537020999998488,
+      "self_cuda_time_ms": 6.080494999999642,
+      "time_ms": 12.537020999998488
+    },
+    {
+      "calls": 1836,
+      "name": "aten::empty_strided",
+      "self_cpu_time_ms": 12.077267000001155,
+      "self_cuda_time_ms": 0.0,
+      "time_ms": 12.077267000001155
+    },
+    {
+      "calls": 2016,
+      "name": "autograd::engine::evaluate_function: ViewBackward0",
+      "self_cpu_time_ms": 10.600765999999771,
+      "self_cuda_time_ms": 0.0,
+      "time_ms": 10.600765999999771
+    },
+    {
+      "calls": 2004,
+      "name": "aten::empty",
+      "self_cpu_time_ms": 10.541003000000636,
+      "self_cuda_time_ms": 0.0,
+      "time_ms": 10.541003000000636
     }
   ],
   "top_cuda_ops": [
@@ -184,106 +216,106 @@
       "calls": 3,
       "name": "ProfilerStep*",
       "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 597.5311929999999,
-      "time_ms": 597.5311929999999
-    },
-    {
-      "calls": 240,
-      "name": "record_param_comms",
-      "self_cpu_time_ms": 13.137099999999908,
-      "self_cuda_time_ms": 559.9955199999994,
-      "time_ms": 559.9955199999994
-    },
-    {
-      "calls": 156,
-      "name": "ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
-      "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 297.84989899999925,
-      "time_ms": 297.84989899999925
-    },
-    {
-      "calls": 156,
-      "name": "nccl:_all_gather_base",
-      "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 297.84989899999925,
-      "time_ms": 297.84989899999925
-    },
-    {
-      "calls": 84,
-      "name": "FullyShardedDataParallel._post_backward_hook",
-      "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 264.266196,
-      "time_ms": 264.266196
-    },
-    {
-      "calls": 84,
-      "name": "ncclDevKernel_ReduceScatter_Sum_bf16_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
-      "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 262.14562100000006,
-      "time_ms": 262.14562100000006
-    },
-    {
-      "calls": 84,
-      "name": "nccl:_reduce_scatter_base",
-      "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 262.14562100000006,
-      "time_ms": 262.14562100000006
+      "self_cuda_time_ms": 566.4307190000001,
+      "time_ms": 566.4307190000001
     },
     {
       "calls": 84,
       "name": "FullyShardedDataParallel.forward",
       "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 197.34308999999962,
-      "time_ms": 197.34308999999962
+      "self_cuda_time_ms": 268.8902990000003,
+      "time_ms": 268.8902990000003
     },
     {
-      "calls": 1884,
+      "calls": 246,
+      "name": "record_param_comms",
+      "self_cpu_time_ms": 14.276614999998335,
+      "self_cuda_time_ms": 89.80500200000013,
+      "time_ms": 89.80500200000013
+    },
+    {
+      "calls": 156,
+      "name": "ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
+      "self_cpu_time_ms": 0.0,
+      "self_cuda_time_ms": 53.97253800000019,
+      "time_ms": 53.97253800000019
+    },
+    {
+      "calls": 156,
+      "name": "nccl:_all_gather_base",
+      "self_cpu_time_ms": 0.0,
+      "self_cuda_time_ms": 53.97253800000019,
+      "time_ms": 53.97253800000019
+    },
+    {
+      "calls": 84,
+      "name": "FullyShardedDataParallel._post_backward_hook",
+      "self_cpu_time_ms": 0.0,
+      "self_cuda_time_ms": 38.20900499999978,
+      "time_ms": 38.20900499999978
+    },
+    {
+      "calls": 84,
+      "name": "ncclDevKernel_ReduceScatter_Sum_bf16_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
+      "self_cpu_time_ms": 0.0,
+      "self_cuda_time_ms": 28.37346699999992,
+      "time_ms": 28.37346699999992
+    },
+    {
+      "calls": 84,
+      "name": "nccl:_reduce_scatter_base",
+      "self_cpu_time_ms": 0.0,
+      "self_cuda_time_ms": 28.37346699999992,
+      "time_ms": 28.37346699999992
+    },
+    {
+      "calls": 6,
+      "name": "nccl:all_reduce",
+      "self_cpu_time_ms": 0.0,
+      "self_cuda_time_ms": 7.458997000000003,
+      "time_ms": 7.458997000000003
+    },
+    {
+      "calls": 1887,
       "name": "aten::copy_",
-      "self_cpu_time_ms": 13.042191999997488,
-      "self_cuda_time_ms": 7.516957999999516,
-      "time_ms": 7.516957999999516
+      "self_cpu_time_ms": 13.235629999997574,
+      "self_cuda_time_ms": 6.462382999997585,
+      "time_ms": 6.462382999997585
     },
     {
       "calls": 612,
       "name": "aten::mm",
-      "self_cpu_time_ms": 13.601085999998565,
-      "self_cuda_time_ms": 6.940214999999967,
-      "time_ms": 6.940214999999967
+      "self_cpu_time_ms": 12.537020999998488,
+      "self_cuda_time_ms": 6.080494999999642,
+      "time_ms": 6.080494999999642
+    },
+    {
+      "calls": 3,
+      "name": "ncclDevKernel_AllReduce_Sum_f32_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
+      "self_cpu_time_ms": 0.0,
+      "self_cuda_time_ms": 4.555258000000002,
+      "time_ms": 4.555258000000002
     },
     {
       "calls": 720,
       "name": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, 4, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)",
       "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 3.619712999999918,
-      "time_ms": 3.619712999999918
+      "self_cuda_time_ms": 3.1757449999985528,
+      "time_ms": 3.1757449999985528
+    },
+    {
+      "calls": 3,
+      "name": "ncclDevKernel_AllReduce_Sum_u32_RING_LL(ncclDevKernelArgsStorage<4096ul>)",
+      "self_cpu_time_ms": 0.0,
+      "self_cuda_time_ms": 2.903739000000001,
+      "time_ms": 2.903739000000001
     },
     {
       "calls": 300,
       "name": "aten::sum",
-      "self_cpu_time_ms": 4.851320000001302,
-      "self_cuda_time_ms": 3.0765920000000295,
-      "time_ms": 3.0765920000000295
-    },
-    {
-      "calls": 300,
-      "name": "void at::native::reduce_kernel<128, 4, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::operator()(at::TensorIterator&)::{lambda(float, float)#1}>, unsigned int, c10::BFloat16, 4, 8> >(at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::operator()(at::TensorIterator&)::{lambda(float, float)#1}>, unsigned int, c10::BFloat16, 4, 8>)",
-      "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 3.0765920000000295,
-      "time_ms": 3.0765920000000295
-    },
-    {
-      "calls": 288,
-      "name": "aten::addmm",
-      "self_cpu_time_ms": 9.124420000000207,
-      "self_cuda_time_ms": 2.7997670000001498,
-      "time_ms": 2.7997670000001498
-    },
-    {
-      "calls": 792,
-      "name": "void at::native::vectorized_elementwise_kernel<4, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul>)",
-      "self_cpu_time_ms": 0.0,
-      "self_cuda_time_ms": 2.501978999999708,
-      "time_ms": 2.501978999999708
+      "self_cpu_time_ms": 4.476549999999865,
+      "self_cuda_time_ms": 2.898040999999961,
+      "time_ms": 2.898040999999961
     }
   ],
   "trace_file": "/workspace/results/profile_8gpu/fsdp_8gpu/rank_00004.trace.json"

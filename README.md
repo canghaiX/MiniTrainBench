@@ -121,7 +121,8 @@ docker build --target gpu-deepspeed \
   -t minitrainbench:deepspeed .
 ```
 
-该 target 默认安装 `deepspeed==0.19.4`，并设置 `DS_BUILD_OPS=0`，避免在
+该 target 默认安装 `deepspeed==0.19.4`，设置 `DS_BUILD_OPS=0`，并在 runtime-only
+CUDA 镜像中设置 `DS_IGNORE_CUDA_DETECTION=1`，避免导入阶段探测不存在的 `nvcc`，也不在
 benchmark 环境里编译 fused optimizer 扩展。默认 `docker build -t minitrainbench:gpu .`
 仍然只生成基础 GPU benchmark 镜像。
 
@@ -135,7 +136,7 @@ benchmark 环境里编译 fused optimizer 扩展。默认 `docker build -t minit
 
 ```bash
 docker build \
-  --build-arg BASE_IMAGE=harbor.baai.ac.cn/flagscale/cuda12.8.1-torch2.7.1-python3.10-te2.9:20260209 \
+  --build-arg BASE_IMAGE=registry.example.com/team/pytorch:cuda-runtime \
   -t minitrainbench:gpu .
 ```
 
@@ -205,7 +206,9 @@ scripts/generate_evidence_manifest.sh
 ```
 
 `results/evidence_manifest.json` 保存每份 JSON 的 SHA256、benchmark 状态、启动命令、
-Git revision、image ID 和 base image。旧 JSON 仍可读取，但会标记为 provenance 不完整。
+Git revision、image ID 和 base image。本轮锁定环境重跑索引了 83 份正式 JSON，全部
+`provenance.complete=true`，统一对应源码 revision `048ca3e` 和同一官方 base digest。
+旧 JSON 仍可读取，但不会混入正式 evidence manifest。
 
 运行显存压力矩阵：
 
@@ -475,44 +478,61 @@ MiniTrainBench 区分两种实验口径：
 ## 实验表格
 
 下表是当前仓库已保存的 repeat=1 短跑基线，在当前主机生成，机器可用
-8x NVIDIA A100-SXM4-40GB。实验使用本地
+8x NVIDIA A100-SXM4-40GB。实验使用锁定官方 digest 的
 PyTorch 2.10.0 + CUDA 13.0 镜像构建的 `minitrainbench:gpu`。每行使用
 23.2M 参数 GPT-like 模型、BF16、合成 token、单 rank batch size 2、
 sequence length 256、2 个 warmup step 和 5 个测量 step。
 
 | 策略 | GPU 数 | 精度 | Data (ms) | 前反向 (ms) | 优化器 (ms) | Tokens/sec | Step time (ms) | 最大显存 (MB) | 扩展效率 | 相对 DDP 显存节省 | 相对 DDP step 差值 (ms) | Repeats |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| ddp | 1 | bf16 | 0.04 | 12.37 | 2.15 | 34794.44 | 14.71 | 481.47 | 100.00% | - | - | 1 |
-| ddp | 2 | bf16 | 0.06 | 15.40 | 2.34 | 56885.71 | 18.00 | 657.68 | 81.75% | - | - | 1 |
-| ddp | 4 | bf16 | 0.09 | 17.78 | 2.87 | 100828.95 | 20.31 | 615.19 | 72.45% | - | - | 1 |
-| ddp | 8 | bf16 | 0.06 | 15.71 | 2.36 | 225918.95 | 18.13 | 657.68 | 81.16% | - | - | 1 |
-| fsdp | 1 | bf16 | 0.05 | 30.15 | 2.56 | 15571.04 | 32.88 | 479.77 | 100.00% | 0.35% | 18.17 | 1 |
-| fsdp | 2 | bf16 | 0.05 | 33.41 | 1.33 | 29465.53 | 34.75 | 276.23 | 94.62% | 58.00% | 16.75 | 1 |
-| fsdp | 4 | bf16 | 0.07 | 35.71 | 1.15 | 56058.97 | 36.53 | 208.09 | 90.01% | 66.17% | 16.22 | 1 |
-| fsdp | 8 | bf16 | 0.06 | 32.29 | 0.92 | 124391.38 | 32.93 | 175.55 | 99.86% | 73.31% | 14.80 | 1 |
+| ddp | 1 | bf16 | 0.04 | 11.96 | 3.09 | 33609.95 | 15.23 | 481.47 | 100.00% | - | - | 1 |
+| ddp | 2 | bf16 | 0.04 | 14.97 | 3.55 | 54956.81 | 18.63 | 567.13 | 81.76% | - | - | 1 |
+| ddp | 4 | bf16 | 0.04 | 14.35 | 3.34 | 114609.10 | 17.87 | 567.13 | 85.25% | - | - | 1 |
+| ddp | 8 | bf16 | 0.05 | 14.44 | 3.40 | 227441.15 | 18.01 | 567.13 | 84.59% | - | - | 1 |
+| fsdp | 1 | bf16 | 0.07 | 30.22 | 4.53 | 14647.57 | 34.95 | 479.77 | 100.00% | 0.35% | 19.72 | 1 |
+| fsdp | 2 | bf16 | 0.05 | 29.30 | 3.41 | 31187.29 | 32.83 | 276.23 | 106.46% | 51.29% | 14.20 | 1 |
+| fsdp | 4 | bf16 | 0.05 | 28.98 | 2.89 | 64193.75 | 31.90 | 208.09 | 109.56% | 63.31% | 14.03 | 1 |
+| fsdp | 8 | bf16 | 0.05 | 29.57 | 2.82 | 126662.75 | 32.34 | 174.59 | 108.09% | 69.22% | 14.33 | 1 |
+
+repeat=3 独立 trial 的稳定性摘要如下；完整 mean/std/min/max 见
+[`results/stability_repeat3/report.md`](results/stability_repeat3/report.md)：
+
+| 策略 | GPU 数 | Tokens/sec mean ± std | Step time mean ± std (ms) | 显存 mean ± std (MB) | 扩展效率 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| DDP | 1 | 33247.71 ± 388.25 | 15.40 ± 0.18 | 481.06 ± 0.29 | 100.00% |
+| DDP | 2 | 57995.87 ± 323.61 | 17.66 ± 0.10 | 630.37 ± 43.38 | 87.22% |
+| DDP | 4 | 115074.98 ± 341.88 | 17.80 ± 0.05 | 630.13 ± 44.55 | 86.53% |
+| DDP | 8 | 227644.04 ± 1695.72 | 17.99 ± 0.13 | 630.13 ± 44.55 | 85.59% |
+| FSDP | 1 | 15932.41 ± 43.86 | 32.14 ± 0.09 | 657.21 ± 144.96 | 100.00% |
+| FSDP | 2 | 31340.13 ± 190.41 | 32.67 ± 0.20 | 274.90 ± 0.94 | 98.35% |
+| FSDP | 4 | 64564.38 ± 744.91 | 31.72 ± 0.36 | 210.51 ± 1.71 | 101.31% |
+| FSDP | 8 | 128972.61 ± 1061.57 | 31.76 ± 0.26 | 172.83 ± 1.24 | 101.19% |
+
+FSDP 略高于 100% 的归一化效率来自 1 卡 FSDP 固定开销、分片后的每 rank 工作量变化和
+短测量窗口，不表示硬件获得了可外推的超线性扩展；判断策略收益还需要结合绝对吞吐和显存。
 
 8 卡 NCCL collective 结果：
 
 | 操作 | 元素数 | 延迟 (ms) | 带宽 (GB/s) |
 | --- | ---: | ---: | ---: |
-| all_reduce | 1024 | 0.052 | 0.080 |
-| all_gather | 1024 | 0.185 | 0.177 |
-| reduce_scatter | 1024 | 0.059 | 0.560 |
-| all_reduce | 1048576 | 0.117 | 35.822 |
-| all_gather | 1048576 | 0.347 | 96.739 |
-| reduce_scatter | 1048576 | 0.245 | 137.122 |
-| all_reduce | 16777216 | 0.724 | 92.734 |
-| all_gather | 16777216 | 3.349 | 160.314 |
-| reduce_scatter | 16777216 | 2.223 | 241.493 |
+| all_reduce | 1024 | 0.167 | 0.025 |
+| all_gather | 1024 | 0.234 | 0.140 |
+| reduce_scatter | 1024 | 0.075 | 0.438 |
+| all_reduce | 1048576 | 0.116 | 36.145 |
+| all_gather | 1048576 | 0.334 | 100.442 |
+| reduce_scatter | 1048576 | 0.243 | 138.101 |
+| all_reduce | 16777216 | 0.719 | 93.297 |
+| all_gather | 16777216 | 3.253 | 165.030 |
+| reduce_scatter | 16777216 | 2.219 | 241.894 |
 
 2 卡 gradient accumulation 同步策略实测：
 
 | 策略 | 请求模式 | 实际模式 | 同步 micro-batch/step | Tokens/sec | Step time (ms) | 最大显存 (MB) |
 | --- | --- | --- | ---: | ---: | ---: | ---: |
-| ddp | auto | last | 1 | 34339.65 | 59.64 | 656.15 |
-| ddp | every | every | 4 | 30118.36 | 68.00 | 655.06 |
-| fsdp | auto | every | 4 | 15661.75 | 130.76 | 267.21 |
-| fsdp | last | last | 1 | 16540.01 | 123.82 | 267.21 |
+| ddp | auto | last | 1 | 37433.80 | 54.71 | 569.65 |
+| ddp | every | every | 4 | 33399.18 | 61.32 | 570.45 |
+| fsdp | auto | every | 4 | 16973.97 | 120.66 | 267.21 |
+| fsdp | last | last | 1 | 17578.88 | 116.50 | 267.21 |
 
 精确恢复校验使用 2 卡 FSDP、BF16、dropout 0.1、小型 17.4K 参数模型。连续 3 step
 和“2 step 保存 + resume 1 step”的 `checkpoint verify` 结果为 `exact_match=true`：
@@ -545,8 +565,8 @@ trace 适合继续检查 kernel 时间线、rank 间等待、collective 调用�
 
 ### 8 卡 Profiler Case Study
 
-同一 23.2M 模型、BF16、`grad_accum_steps=4` 下，DDP 平均 step time 为 99.11 ms，
-FSDP 为 199.49 ms；DDP 每 rank 峰值显存约 569.65 MB，FSDP 为 131.83-134.30 MB。
+同一 23.2M 模型、BF16、`grad_accum_steps=4` 下，DDP 平均 step time 为 102.79 ms，
+FSDP 为 189.97 ms；DDP 每 rank 峰值显存约 569.65 MB，FSDP 为 131.83-134.30 MB。
 DDP 主要 collective 是 all-reduce，FSDP 则在 profile window 内出现更高频的
 all-gather/reduce-scatter。两组 rank `max/p50` 均低于 1.002，没有观察到明显
 step-time straggler。collective event duration 可能与计算重叠，因此不能当作纯阻塞
@@ -595,23 +615,28 @@ DeepSpeed adapter 不复用当前 DDP/FSDP 的 DCP checkpoint/resume，因为 De
 有自己的状态管理和 checkpoint 生命周期。当前项目选择把 ZeRO 作为横向 benchmark，
 而不是把两套 checkpoint 语义混在同一个 `Trainer` 里。
 
+23.2M 小模型的 8 卡 repeat=3 结果中，ZeRO-2 为 `190.6K ± 1.9K tokens/sec`，ZeRO-3
+为 `52.5K ± 0.6K tokens/sec`，两者峰值显存均约 2.15 GB，高于同口径 DDP。这里是
+DeepSpeed engine 固定开销和细粒度 gather 主导；到 731.1M/2.60B 压力档位后，分片策略
+才更清楚地展示可训练上限和显存收益，不能用小模型结果否定或夸大 ZeRO 的价值。
+
 ## 瓶颈分析
 
 DDP 会在每个 rank 上保留完整的模型参数、梯度和优化器状态。它的主要分布式
 开销来自梯度 all-reduce。这个 8x A100 full-node 短跑中，DDP 从 1 卡的
-34.8k tokens/sec 扩展到 8 卡的 225.9k tokens/sec，扩展效率为 81.2%；最大显存
-则在 481-658 MB 区间。forward/backward 加 optimizer 时间在 8 卡约为 18.1 ms，
+33.6k tokens/sec 扩展到 8 卡的 227.4k tokens/sec，扩展效率为 84.6%；最大显存
+则在 481-567 MB 区间。forward/backward 加 optimizer 时间在 8 卡约为 18.0 ms，
 说明当前 23.2M 小模型仍能在单节点内维持较高的扩展效率。
 
 FSDP 会分片参数、梯度和优化器状态，因此可以降低稳定状态下的显存占用；代价是
 在包裹的 Transformer block 周围引入参数 all-gather 和梯度 reduce-scatter
-通信。在同一轮 8 卡实验中，FSDP 的最大显存从 1 卡的 479.8 MB 降到 175.5 MB，
-相对 8 卡 DDP 节省 73.3%；吞吐从 15.6k 提升到 124.4k tokens/sec，step time 为
-32.9 ms。它仍慢于 DDP，但相对 1 卡的扩展效率接近 100%，说明完整节点上的分片
+通信。在同一轮 8 卡实验中，FSDP 的最大显存从 1 卡的 479.8 MB 降到 174.6 MB，
+相对 8 卡 DDP 节省 69.2%；吞吐从 14.6k 提升到 126.7k tokens/sec，step time 为
+32.3 ms。它仍慢于 DDP；短跑中相对 1 卡的扩展效率为 108.1%，说明完整节点上的分片
 收益能够摊薄部分通信成本。对更大模型，FSDP 的显存优势通常会更重要。
 
 8 卡 NCCL 结果进一步解释了这个取舍：1024 元素的小 collective 仍受固定延迟限制；
-16M 元素时 all-reduce、all-gather、reduce-scatter 分别达到 92.7、160.3、241.5
+16M 元素时 all-reduce、all-gather、reduce-scatter 分别达到 93.3、165.0、241.9
 GB/s。FSDP 的 all-gather/reduce-scatter 在大 tensor 下有较高带宽，但每个 block
 重复触发 collective，仍会给小模型带来可见的调度和同步开销。
 
@@ -625,9 +650,9 @@ all-to-all latency，不能用 all-reduce 的结果直接替代。
 activation checkpointing 通过额外重计算换取更低 activation 显存；gradient
 accumulation 则通过在同步点之间累积更多计算，减少优化器更新频率。实现上，DDP 若在
 每个 micro-batch 同步，会重复触发梯度 all-reduce；本轮 2 卡实验中，`auto` 解析为
-末步同步后将 step time 从 68.00 ms 降到 59.64 ms。FSDP 默认保持每 micro-batch
+末步同步后将 step time 从 61.32 ms 降到 54.71 ms。FSDP 默认保持每 micro-batch
 同步，避免未分片梯度在 accumulation window 内累积；显式 `last` 在本轮短跑将 step
-time 从 130.76 ms 降到 123.82 ms，但这个 23.2M 模型没有观察到额外峰值显存，不能将
+time 从 120.66 ms 降到 116.50 ms，但这个 23.2M 模型没有观察到额外峰值显存，不能将
 该现象外推到更大模型。当前表格只跑了 `repeat=1`，适合展示 full-node 覆盖；用于严谨
 性能结论时应使用 `REPEAT=3` 或更高。
 

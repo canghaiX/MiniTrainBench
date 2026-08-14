@@ -2,10 +2,17 @@
 set -euo pipefail
 
 OUT="${OUT:-results/evidence_manifest.json}"
-mapfile -t inputs < <(
+inputs=()
+while IFS= read -r path; do
+  if git check-ignore --quiet --no-index "${path}"; then
+    continue
+  fi
+  inputs+=("${path}")
+done < <(
   find results -type f -name '*.json' \
-    ! -path '*/rank_*.trace.json' \
-    ! -path '*/checkpoints/*' \
+    ! -name 'metadata.json' \
+    ! -name 'rank_*_summary.json' \
+    ! -name 'manifest.json' \
     ! -path 'results/evidence_manifest.json' \
     -print | sort
 )

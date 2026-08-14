@@ -1,89 +1,261 @@
 {
+  "all_to_all_mode": "both",
   "backend": "nccl",
   "benchmark": "communication",
   "device": "cuda:0",
   "dtype": "float32",
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
   "iters": 50,
+  "operations": [
+    "all_reduce",
+    "all_gather",
+    "reduce_scatter",
+    "all_to_all"
+  ],
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "torchrun --standalone --nproc_per_node=4 -m minitrainbench comm --device cuda --backend nccl --sizes 1024\\,1048576\\,16777216 --warmup 10 --iters 50 --output /workspace/results/nccl_4gpu.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+    "image_ref": "minitrainbench:gpu",
+    "missing_fields": []
+  },
   "results": [
     {
-      "bandwidth_gbps": 0.07561868987654614,
+      "bandwidth_gbps": 0.08946219674347915,
       "bytes": 4096,
       "elements": 1024,
-      "latency_ms": 0.054166503105079755,
+      "latency_ms": 0.04578470179694705,
       "operation": "all_reduce",
       "status": "ok",
       "world_size": 4
     },
     {
-      "bandwidth_gbps": 0.1217209090184643,
+      "bandwidth_gbps": 0.10047533761221032,
       "bytes": 16384,
       "elements": 1024,
-      "latency_ms": 0.13460300397127867,
+      "latency_ms": 0.1630648912396282,
       "operation": "all_gather",
       "status": "ok",
       "world_size": 4
     },
     {
-      "bandwidth_gbps": 0.2688239053074637,
+      "bandwidth_gbps": 0.29463842723481565,
       "bytes": 16384,
       "elements": 1024,
-      "latency_ms": 0.060946960729779676,
+      "latency_ms": 0.055607139074709266,
       "operation": "reduce_scatter",
       "status": "ok",
       "world_size": 4
     },
     {
-      "bandwidth_gbps": 41.17223015075372,
+      "bandwidth_gbps": 0.3055451971556054,
+      "bytes": 16384,
+      "elements": 1024,
+      "elements_per_peer": 1024,
+      "input_splits": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "latency_ms": 0.05362218144000508,
+      "operation": "all_to_all",
+      "output_splits": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 4096,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 0.2948001480823859,
+      "bytes": 16408,
+      "elements": 1024,
+      "elements_per_peer": 1024,
+      "input_splits": [
+        1024,
+        1025,
+        1026,
+        1027
+      ],
+      "latency_ms": 0.0556580453121569,
+      "operation": "all_to_all",
+      "output_splits": [
+        1024,
+        1025,
+        1026,
+        1027
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 4102,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 41.83448789165977,
       "bytes": 4194304,
       "elements": 1048576,
-      "latency_ms": 0.10187215957557783,
+      "latency_ms": 0.10025947995018214,
       "operation": "all_reduce",
       "status": "ok",
       "world_size": 4
     },
     {
-      "bandwidth_gbps": 72.43305075652438,
+      "bandwidth_gbps": 95.05180879145203,
       "bytes": 16777216,
       "elements": 1048576,
-      "latency_ms": 0.2316237660124898,
+      "latency_ms": 0.17650601512286812,
       "operation": "all_gather",
       "status": "ok",
       "world_size": 4
     },
     {
-      "bandwidth_gbps": 129.76810724402364,
+      "bandwidth_gbps": 130.09085706000226,
       "bytes": 16777216,
       "elements": 1048576,
-      "latency_ms": 0.12928612704854459,
+      "latency_ms": 0.12896537373308092,
       "operation": "reduce_scatter",
       "status": "ok",
       "world_size": 4
     },
     {
-      "bandwidth_gbps": 103.57715942147786,
+      "bandwidth_gbps": 134.77811412203113,
+      "bytes": 16777216,
+      "elements": 1048576,
+      "elements_per_peer": 1048576,
+      "input_splits": [
+        1048576,
+        1048576,
+        1048576,
+        1048576
+      ],
+      "latency_ms": 0.12448026973288506,
+      "operation": "all_to_all",
+      "output_splits": [
+        1048576,
+        1048576,
+        1048576,
+        1048576
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 4194304,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 59.71205136191337,
+      "bytes": 16777240,
+      "elements": 1048576,
+      "elements_per_peer": 1048576,
+      "input_splits": [
+        1048576,
+        1048577,
+        1048578,
+        1048579
+      ],
+      "latency_ms": 0.28096907772123814,
+      "operation": "all_to_all",
+      "output_splits": [
+        1048576,
+        1048577,
+        1048578,
+        1048579
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 4194310,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 104.64154559522102,
       "bytes": 67108864,
       "elements": 16777216,
-      "latency_ms": 0.6479118019342422,
+      "latency_ms": 0.6413214141502976,
       "operation": "all_reduce",
       "status": "ok",
       "world_size": 4
     },
     {
-      "bandwidth_gbps": 44.06188102722334,
+      "bandwidth_gbps": 156.3538862426806,
       "bytes": 268435456,
       "elements": 16777216,
-      "latency_ms": 6.092237774282694,
+      "latency_ms": 1.7168454360216856,
       "operation": "all_gather",
       "status": "ok",
       "world_size": 4
     },
     {
-      "bandwidth_gbps": 147.65195061850235,
+      "bandwidth_gbps": 221.88975073942086,
       "bytes": 268435456,
       "elements": 16777216,
-      "latency_ms": 1.818028511479497,
+      "latency_ms": 1.209769514389336,
       "operation": "reduce_scatter",
       "status": "ok",
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 227.48576284283962,
+      "bytes": 268435456,
+      "elements": 16777216,
+      "elements_per_peer": 16777216,
+      "input_splits": [
+        16777216,
+        16777216,
+        16777216,
+        16777216
+      ],
+      "latency_ms": 1.1800099164247513,
+      "operation": "all_to_all",
+      "output_splits": [
+        16777216,
+        16777216,
+        16777216,
+        16777216
+      ],
+      "split_mode": "equal",
+      "status": "ok",
+      "total_elements_per_rank": 67108864,
+      "world_size": 4
+    },
+    {
+      "bandwidth_gbps": 98.75959685921947,
+      "bytes": 268435480,
+      "elements": 16777216,
+      "elements_per_peer": 16777216,
+      "input_splits": [
+        16777216,
+        16777217,
+        16777218,
+        16777219
+      ],
+      "latency_ms": 2.718069823458791,
+      "operation": "all_to_all",
+      "output_splits": [
+        16777216,
+        16777217,
+        16777218,
+        16777219
+      ],
+      "split_mode": "uneven",
+      "status": "ok",
+      "total_elements_per_rank": 67108870,
       "world_size": 4
     }
   ],

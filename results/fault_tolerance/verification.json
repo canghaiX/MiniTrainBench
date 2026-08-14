@@ -1,0 +1,58 @@
+{
+  "benchmark": "checkpoint_verification",
+  "config_fingerprint": "4cfba74c47a5353498b04ca402ee3afba09dee4a787a5bfc9049a53371dcb95d",
+  "digests": {
+    "left": {
+      "model": "931debd1b090bb1555c281d2e7ce1fbb507bb0a80014a491ab466ab648fffebe",
+      "optimizer": "5e91be0ddb84781b1296c40875fe14900230bf424a6d4f63f21ca173b2b476ce",
+      "rng": "11025e1ed49d81a0a3c69ecd324992bb4a64524c08987dbcc49d102149717300",
+      "scheduler": "936e3e5b3ade5a90e281834f0031f1e89941e4e097d44cfe72cfd0f7045c0502",
+      "train_state": "788b8a1250d38209f618127e42296929942439b5dde14bb8f3c1769febe5da31"
+    },
+    "right": {
+      "model": "931debd1b090bb1555c281d2e7ce1fbb507bb0a80014a491ab466ab648fffebe",
+      "optimizer": "5e91be0ddb84781b1296c40875fe14900230bf424a6d4f63f21ca173b2b476ce",
+      "rng": "11025e1ed49d81a0a3c69ecd324992bb4a64524c08987dbcc49d102149717300",
+      "scheduler": "936e3e5b3ade5a90e281834f0031f1e89941e4e097d44cfe72cfd0f7045c0502",
+      "train_state": "788b8a1250d38209f618127e42296929942439b5dde14bb8f3c1769febe5da31"
+    }
+  },
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
+  "exact_match": true,
+  "left": "/workspace/results/fault_tolerance/continuous/step_00000003",
+  "left_determinism_reason": "restored_rank_rng_state",
+  "left_deterministic": true,
+  "matches": {
+    "model": true,
+    "optimizer": true,
+    "rng": true,
+    "scheduler": true,
+    "train_state": true
+  },
+  "precision": "fp32",
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "python3 -m minitrainbench fault smoke --device cpu --backend gloo --strategy ddp --precision fp32 --batch-size 1 --seq-length 8 --vocab-size 64 --d-model 16 --n-heads 4 --n-layers 1 --dropout 0.2 --checkpoint-dir /workspace/results/fault_tolerance/continuous --output /workspace/results/fault_tolerance/fault_tolerance.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+    "image_ref": "minitrainbench:gpu",
+    "missing_fields": []
+  },
+  "right": "/workspace/results/fault_tolerance/interrupted/step_00000003",
+  "right_determinism_reason": "restored_rank_rng_state",
+  "right_deterministic": true,
+  "strategy": "ddp",
+  "world_size": 1
+}

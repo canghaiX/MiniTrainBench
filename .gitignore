@@ -22,6 +22,8 @@ results/runtime_stability/fault_tolerance.json
 results/runtime_stability/fault/*
 !results/runtime_stability/fault/fault_tolerance.json
 results/**/rank_*.trace.json
+results/**/step_*/
+results/**/latest
 results/memory_pressure/logs/
 results/memory_pressure/raw/
 results/rank_crash/reference/

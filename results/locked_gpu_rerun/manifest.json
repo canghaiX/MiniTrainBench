@@ -1,20 +1,23 @@
 {
-  "benchmark": "locked_gpu_rerun",
-  "status": "not_run",
-  "requested_commit": "1fc930cbc66029e20c21f3d942597249253c60df",
   "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
   "base_manifest_verified": true,
-  "gpu": "NVIDIA A100-SXM4-40GB",
-  "driver": "580.173.02",
-  "requested_matrix": [
-    "ddp/fsdp 1/2/4/8 GPU repeat=3",
-    "DeepSpeed ZeRO-2/3 1/2/4/8 GPU repeat=3",
-    "memory pressure small/medium/large/stress",
-    "2/8 GPU profiler",
-    "NCCL collectives and all-to-all",
-    "TP/SP/MoE correctness smoke",
-    "rank crash recovery"
+  "benchmark": "locked_gpu_rerun",
+  "completed": [
+    "ddp/fsdp 1/2/4/8 GPU short benchmark",
+    "ddp/fsdp 1/2/4/8 GPU repeat=3 stability benchmark",
+    "deepspeed zero-2/3 1/2/4/8 GPU repeat=3 benchmark",
+    "memory pressure small/medium/large/stress benchmark",
+    "2/8 GPU pytorch profiler summary",
+    "4/8 GPU nccl collectives and 2/4/8 GPU all-to-all",
+    "tp/mlp/sp and moe routing correctness smoke",
+    "gradient sync and checkpoint determinism smoke",
+    "scheduler/nonfinite stability and rank crash exact recovery"
   ],
-  "completed": [],
-  "reason": "官方基础镜像 manifest 已验证，但 2.95 GB layer 通过当前 Docker Hub/代理网络持续 EOF，未完成锁定镜像构建；为避免混用旧私有镜像，不生成新的正式 GPU 数字。"
+  "completed_at": "2026-08-14T10:56:51+08:00",
+  "deepspeed_image_id": "sha256:9dfe0ef5c91f1814db63aebc3b359cd3e59a9330a728948a03f3d9fd7e4d9cc4",
+  "driver": "580.173.02",
+  "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "gpu_image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+  "status": "success"
 }

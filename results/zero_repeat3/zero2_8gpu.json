@@ -22,7 +22,7 @@
     "zero_stage": 2
   },
   "config_fingerprint": "f225a4494ab8fc76a0400137414eb64b1a98cde73a7d3b054858a8ec23944cf3",
-  "data_time_ms": 0.042375557124614716,
+  "data_time_ms": 0.042209199319283165,
   "deepspeed_config": {
     "bf16": {
       "enabled": true
@@ -48,12 +48,16 @@
   "device": "cuda:0",
   "environment": {
     "cuda": "13.0",
+    "cudnn": "91501",
     "deepspeed": "0.19.4",
+    "driver": "580.173.02",
     "gpu": "NVIDIA A100-SXM4-40GB",
-    "python": "3.10.12",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
     "torch": "2.10.0+cu130"
   },
-  "forward_backward_ms": 19.175518035888672,
+  "forward_backward_ms": 17.932199478149414,
   "global_batch_size": 16,
   "global_step": 25,
   "gradient_accumulation_steps": 1,
@@ -67,47 +71,58 @@
     "seq_length": 256,
     "vocab_size": 8192
   },
-  "optimizer_step_ms": 3.557415326436361,
+  "optimizer_step_ms": 3.405888557434082,
   "parameters": 23240704,
   "precision": "bf16",
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "torchrun --standalone --nproc_per_node=8 -m minitrainbench deepspeed --zero-stage 2 --precision bf16 --batch-size 2 --seq-length 256 --vocab-size 8192 --d-model 512 --n-heads 8 --n-layers 6 --steps 20 --warmup-steps 5 --repeat 3 --output /workspace/results/zero_repeat3/zero2_8gpu.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:9dfe0ef5c91f1814db63aebc3b359cd3e59a9330a728948a03f3d9fd7e4d9cc4",
+    "image_ref": "minitrainbench:deepspeed",
+    "missing_fields": []
+  },
   "repeat_count": 3,
   "repeats": [
     {
-      "data_time_ms": 0.04297653213143349,
-      "forward_backward_ms": 19.209503173828125,
+      "data_time_ms": 0.0446949377655983,
+      "forward_backward_ms": 18.198972702026367,
       "global_step": 25,
       "loss": 45.21875,
       "max_cuda_memory_mb": 2072.466796875,
-      "optimizer_step_ms": 3.493105888366699,
+      "optimizer_step_ms": 3.4404640197753906,
       "repeat_index": 0,
-      "step_time_ms": 22.968002319335938,
-      "tokens_per_sec": 178335.05687831304,
+      "step_time_ms": 21.79408073425293,
+      "tokens_per_sec": 187940.93909923313,
       "tokens_seen": 102400,
       "trial_protocol": "independent_reinitialize"
     },
     {
-      "data_time_ms": 0.04222413897514343,
-      "forward_backward_ms": 18.981842041015625,
+      "data_time_ms": 0.04072033241391182,
+      "forward_backward_ms": 17.757524490356445,
       "global_step": 25,
       "loss": 45.21875,
       "max_cuda_memory_mb": 2152.10986328125,
-      "optimizer_step_ms": 3.6892056465148926,
+      "optimizer_step_ms": 3.3705811500549316,
       "repeat_index": 1,
-      "step_time_ms": 22.867645263671875,
-      "tokens_per_sec": 179117.69894852315,
+      "step_time_ms": 21.28839874267578,
+      "tokens_per_sec": 192405.26492905992,
       "tokens_seen": 102400,
       "trial_protocol": "independent_reinitialize"
     },
     {
-      "data_time_ms": 0.04192600026726723,
-      "forward_backward_ms": 19.335208892822266,
+      "data_time_ms": 0.041212327778339386,
+      "forward_backward_ms": 17.84010124206543,
       "global_step": 25,
       "loss": 45.21875,
       "max_cuda_memory_mb": 2230.8369140625,
-      "optimizer_step_ms": 3.4899344444274902,
+      "optimizer_step_ms": 3.406620502471924,
       "repeat_index": 2,
-      "step_time_ms": 23.06991958618164,
-      "tokens_per_sec": 177547.2161790027,
+      "step_time_ms": 21.381134033203125,
+      "tokens_per_sec": 191570.7554912313,
       "tokens_seen": 102400,
       "trial_protocol": "independent_reinitialize"
     }
@@ -130,21 +145,21 @@
     "trial_protocol": "independent_reinitialize",
     "zero_stage": 2
   },
-  "step_time_ms": 22.968522389729817,
+  "step_time_ms": 21.487871170043945,
   "steps": 20,
   "strategy": "deepspeed_zero2",
   "summary": {
     "data_time_ms": {
-      "max": 0.04297653213143349,
-      "mean": 0.042375557124614716,
-      "min": 0.04192600026726723,
-      "std": 0.00044204064021244327
+      "max": 0.0446949377655983,
+      "mean": 0.042209199319283165,
+      "min": 0.04072033241391182,
+      "std": 0.001769121547976362
     },
     "forward_backward_ms": {
-      "max": 19.335208892822266,
-      "mean": 19.175518035888672,
-      "min": 18.981842041015625,
-      "std": 0.1462492739343956
+      "max": 18.198972702026367,
+      "mean": 17.932199478149414,
+      "min": 17.757524490356445,
+      "std": 0.19162584153149254
     },
     "max_cuda_memory_mb": {
       "max": 2230.8369140625,
@@ -153,25 +168,25 @@
       "std": 64.65469010166956
     },
     "optimizer_step_ms": {
-      "max": 3.6892056465148926,
-      "mean": 3.557415326436361,
-      "min": 3.4899344444274902,
-      "std": 0.09319882282506328
+      "max": 3.4404640197753906,
+      "mean": 3.405888557434082,
+      "min": 3.3705811500549316,
+      "std": 0.028534256345025905
     },
     "step_time_ms": {
-      "max": 23.06991958618164,
-      "mean": 22.968522389729817,
-      "min": 22.867645263671875,
-      "std": 0.08257896520546101
+      "max": 21.79408073425293,
+      "mean": 21.487871170043945,
+      "min": 21.28839874267578,
+      "std": 0.21980776667668775
     },
     "tokens_per_sec": {
-      "max": 179117.69894852315,
-      "mean": 178333.32400194628,
-      "min": 177547.2161790027,
-      "std": 641.1480767527053
+      "max": 192405.26492905992,
+      "mean": 190638.9865065081,
+      "min": 187940.93909923313,
+      "std": 1937.9880218728085
     }
   },
-  "tokens_per_sec": 178333.32400194628,
+  "tokens_per_sec": 190638.9865065081,
   "tokens_seen": 102400,
   "trial_protocol": "independent_reinitialize",
   "warmup_steps": 5,

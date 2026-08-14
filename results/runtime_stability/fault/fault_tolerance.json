@@ -3,6 +3,16 @@
   "benchmark": "fault_tolerance",
   "continuous_checkpoint": "/workspace/results/runtime_stability/fault/continuous/step_00000002",
   "device": "cuda",
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
   "failure_handling": [
     {
       "auto_recovered": true,
@@ -60,6 +70,17 @@
   ],
   "interrupted_checkpoint": "/workspace/results/runtime_stability/fault/interrupted/step_00000002",
   "precision": "bf16",
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "torchrun --standalone --nproc_per_node=2 -m minitrainbench fault smoke --device cuda --backend nccl --strategy fsdp --precision bf16 --batch-size 1 --seq-length 16 --vocab-size 128 --d-model 32 --n-heads 4 --n-layers 1 --dropout 0.1 --lr-scheduler cosine --lr-warmup-steps 1 --lr-decay-steps 3 --min-learning-rate 0.00003 --max-grad-norm 1.0 --continuous-steps 2 --interrupted-steps 1 --resume-steps 1 --keep-last 0 --output /workspace/results/runtime_stability/fault/fault_tolerance.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+    "image_ref": "minitrainbench:gpu",
+    "missing_fields": []
+  },
   "resume_checkpoint": "/workspace/results/runtime_stability/fault/interrupted/step_00000001",
   "strategy": "fsdp",
   "training_outputs": {
@@ -86,6 +107,16 @@
         "train_state": "a7220dba5dcdb0fff68c9e0c6caeb179c496fe5f3b93f6a209e4da175ac69c51"
       }
     },
+    "environment": {
+      "cuda": "13.0",
+      "cudnn": "91501",
+      "driver": "580.173.02",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "gpu_count": 8,
+      "nccl": "2.28.9",
+      "python": "3.12.3",
+      "torch": "2.10.0+cu130"
+    },
     "exact_match": true,
     "left": "/workspace/results/runtime_stability/fault/continuous/step_00000002",
     "left_determinism_reason": "restored_rank_rng_state",
@@ -98,6 +129,17 @@
       "train_state": true
     },
     "precision": "bf16",
+    "provenance": {
+      "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+      "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+      "command": "torchrun --standalone --nproc_per_node=2 -m minitrainbench fault smoke --device cuda --backend nccl --strategy fsdp --precision bf16 --batch-size 1 --seq-length 16 --vocab-size 128 --d-model 32 --n-heads 4 --n-layers 1 --dropout 0.1 --lr-scheduler cosine --lr-warmup-steps 1 --lr-decay-steps 3 --min-learning-rate 0.00003 --max-grad-norm 1.0 --continuous-steps 2 --interrupted-steps 1 --resume-steps 1 --keep-last 0 --output /workspace/results/runtime_stability/fault/fault_tolerance.json",
+      "complete": true,
+      "git_dirty": false,
+      "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+      "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+      "image_ref": "minitrainbench:gpu",
+      "missing_fields": []
+    },
     "right": "/workspace/results/runtime_stability/fault/interrupted/step_00000002",
     "right_determinism_reason": "restored_rank_rng_state",
     "right_deterministic": true,

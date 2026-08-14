@@ -1,19 +1,31 @@
 {
   "benchmark": "checkpoint_verification",
-  "config_fingerprint": "7f02955a0ecbcc3a26eff19b0b6119f06996bcf49d7e2661ec20cecb22014c1a",
+  "config_fingerprint": "8e7536b01e614ddd06ca1c6defe4778d087220a1254f5dda8c91f96745a87855",
   "digests": {
     "left": {
       "model": "bfde59caa0671b1db8f257c0f1ca511e2b9064fad2107da7ffe9359e63ea72cf",
       "optimizer": "ffec806bdbf02f41dd274ab148327fc99281e2ae2f2ec47daeef2c51c09f7c1a",
       "rng": "691db6ab7d3e650c97efb02898e0e47c29973253ef898a2a92b96f75c89a1bfd",
-      "train_state": "7115642c119de0513d0aec4cef7ea2b393cde72a3a3443ccb303eba140df4b7e"
+      "scheduler": "ce10b6804ac7cacacf97d5bafbf774693bcbe89e2eaff1ce11c6664728226ab0",
+      "train_state": "da8ae06008f56807410bf89c4f8a95d0d0c50ec5370dd5376dfad223428c74f7"
     },
     "right": {
       "model": "bfde59caa0671b1db8f257c0f1ca511e2b9064fad2107da7ffe9359e63ea72cf",
       "optimizer": "ffec806bdbf02f41dd274ab148327fc99281e2ae2f2ec47daeef2c51c09f7c1a",
       "rng": "691db6ab7d3e650c97efb02898e0e47c29973253ef898a2a92b96f75c89a1bfd",
-      "train_state": "7115642c119de0513d0aec4cef7ea2b393cde72a3a3443ccb303eba140df4b7e"
+      "scheduler": "ce10b6804ac7cacacf97d5bafbf774693bcbe89e2eaff1ce11c6664728226ab0",
+      "train_state": "da8ae06008f56807410bf89c4f8a95d0d0c50ec5370dd5376dfad223428c74f7"
     }
+  },
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
   },
   "exact_match": true,
   "left": "/workspace/results/runtime_determinism/continuous_fsdp_2proc/step_00000003",
@@ -23,9 +35,21 @@
     "model": true,
     "optimizer": true,
     "rng": true,
+    "scheduler": true,
     "train_state": true
   },
   "precision": "bf16",
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "command": "torchrun --standalone --nproc_per_node=2 -m minitrainbench checkpoint verify --device cuda --left /workspace/results/runtime_determinism/continuous_fsdp_2proc/step_00000003 --right /workspace/results/runtime_determinism/interrupted_fsdp_2proc/step_00000003 --output /workspace/results/runtime_determinism/verification.json",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "048ca3ed54df85af5f584f10361c8fac8be85b0e",
+    "image_id": "sha256:95dcdfd0b5646e720f3467d235d37ae445390faca6269d20cc0648f528dfb585",
+    "image_ref": "minitrainbench:gpu",
+    "missing_fields": []
+  },
   "right": "/workspace/results/runtime_determinism/interrupted_fsdp_2proc/step_00000003",
   "right_determinism_reason": "restored_rank_rng_state",
   "right_deterministic": true,
