@@ -8,10 +8,12 @@ REPEAT="${REPEAT:-3}"
 MEGATRON_REF="${MEGATRON_REF:-core_v0.18.2}"
 MEGATRON_IMAGE="${MEGATRON_IMAGE:-minitrainbench:megatron}"
 TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-local}"
+EVIDENCE_MODE="${EVIDENCE_MODE:-formal}"
 mkdir -p "${OUT_DIR}/records"
 
+read -r -a matrix_items <<<"${MATRIX}"
 aggregates=()
-for item in ${MATRIX}; do
+for item in "${matrix_items[@]}"; do
   tp="${item%%:*}"
   pp="${item##*:}"
   name="tp${tp}_pp${pp}"
@@ -20,6 +22,7 @@ for item in ${MATRIX}; do
   for ((trial = 1; trial <= REPEAT; trial++)); do
     MEGATRON_DIR="${MEGATRON_DIR}" MEGATRON_REF="${MEGATRON_REF}" \
       MEGATRON_IMAGE="${MEGATRON_IMAGE}" TRANSFORMER_IMPL="${TRANSFORMER_IMPL}" \
+      EVIDENCE_MODE="${EVIDENCE_MODE}" \
       OUT_DIR="${OUT_DIR}" TP="${tp}" PP="${pp}" NAME="${name}" \
       TRIAL_INDEX="${trial}" scripts/run_megatron_smoke.sh || true
     trial_record="${OUT_DIR}/records/${name}_trial$(printf '%02d' "${trial}").json"
@@ -43,23 +46,39 @@ fi
 PYTHONPATH=src python3 -m minitrainbench.evidence megatron-report \
   --input "${aggregates[@]}" --output "${OUT_DIR}/report.md"
 
-python3 - "${OUT_DIR}" "${REPEAT}" "${aggregates[@]}" <<'PY'
+python3 - "${OUT_DIR}" "${REPEAT}" "${#matrix_items[@]}" "${aggregates[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 out_dir = Path(sys.argv[1])
 expected_repeat = int(sys.argv[2])
-record_paths = [Path(value) for value in sys.argv[3:]]
+expected_configs = int(sys.argv[3])
+record_paths = [Path(value) for value in sys.argv[4:]]
 records = [json.loads(path.read_text()) for path in record_paths]
 successful = [row for row in records if row.get("status") == "success"]
-all_complete = len(records) == 5 and len(successful) == 5
+all_complete = len(records) == expected_configs and len(successful) == expected_configs
+performance_valid = all_complete and all(
+    row.get("performance_valid", True) for row in successful
+)
+invalid_reasons = sorted({
+    reason
+    for row in records
+    for reason in row.get("performance_invalid_reasons", [])
+})
 manifest = {
     "benchmark": "megatron_matrix",
-    "status": "success" if all_complete else ("partial" if successful else "failed"),
+    "status": (
+        "success" if performance_valid else
+        "compatibility_smoke" if all_complete else
+        "partial" if successful else "failed"
+    ),
+    "execution_complete": all_complete,
+    "performance_valid": performance_valid,
+    "performance_invalid_reasons": invalid_reasons,
     "config_count": len(records),
     "successful_config_count": len(successful),
-    "expected_config_count": 5,
+    "expected_config_count": expected_configs,
     "expected_repeat_count": expected_repeat,
     "megatron": records[0].get("megatron"),
     "environment": records[0].get("environment"),

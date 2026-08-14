@@ -603,6 +603,19 @@ number of parameters: 1000000
     )
     assert "tp2_pp2" in megatron_report
     assert "4096.0" in megatron_report
+    compatibility_report = render_megatron_report(
+        [
+            {
+                "name": "tp2_pp2",
+                "status": "success",
+                "performance_valid": False,
+                "performance_invalid_reasons": ["compatibility_smoke"],
+                "metrics": metrics,
+            }
+        ]
+    )
+    assert "性能指标不可横向比较" in compatibility_report
+    assert "4096.0" not in compatibility_report
 
 
 def test_megatron_parallel_and_batch_constraints() -> None:
@@ -720,6 +733,17 @@ def test_megatron_missing_samples_and_repeat_aggregation() -> None:
         "min": 90.0,
         "max": 110.0,
     }
+    invalid_trials = [
+        {
+            **row,
+            "performance_valid": False,
+            "performance_invalid_reasons": ["compatibility_smoke"],
+        }
+        for row in successful
+    ]
+    invalid = aggregate_megatron_trials(invalid_trials, expected_repeats=3)
+    assert invalid["performance_valid"] is False
+    assert invalid["performance_invalid_reasons"] == ["compatibility_smoke"]
 
     failed = dict(successful[-1], status="oom", failure_reason="CUDA 内存不足")
     partial = aggregate_megatron_trials(

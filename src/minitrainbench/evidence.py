@@ -355,6 +355,17 @@ def aggregate_megatron_trials(
         "model_config": first.get("model_config"),
         "batch_config": first.get("batch_config"),
         "runtime": first.get("runtime"),
+        "evidence_mode": first.get("evidence_mode", "formal"),
+        "performance_valid": all(
+            row.get("performance_valid", True) for row in rows
+        ),
+        "performance_invalid_reasons": sorted(
+            {
+                reason
+                for row in rows
+                for reason in row.get("performance_invalid_reasons", [])
+            }
+        ),
         "status": status,
         "failure_reason": reason,
         "repeat_count": len(rows),
@@ -503,16 +514,32 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
         ),
         "",
         (
-            "| 配置 | 环境 | TP | PP | DP | Repeat | 状态 | Tokens/sec | Step (ms) | "
+            "| 配置 | 环境 | TP | PP | DP | Repeat | 状态 | 性能可比 | Tokens/sec | Step (ms) | "
             "设备峰值显存 (MB) | 理论 bubble proxy | 失败原因 |"
         ),
         (
-            "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | "
+            "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | "
             "---: | ---: | --- |"
         ),
     ]
 
+    if any(not row.get("performance_valid", True) for row in rows):
+        reasons = sorted(
+            {
+                reason
+                for row in rows
+                for reason in row.get("performance_invalid_reasons", [])
+            }
+        )
+        lines[4:4] = [
+            "**警告：本报告包含兼容性 smoke，性能指标不可横向比较。**",
+            "原因：" + ", ".join(reasons),
+            "",
+        ]
+
     def formatted_summary(row: dict[str, Any], name: str) -> str:
+        if not row.get("performance_valid", True):
+            return "-"
         summary = row.get("summary", {}).get(name)
         if summary:
             return f"{summary['mean']:.2f} +/- {summary['std']:.2f}"
@@ -525,7 +552,9 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
             f"{row.get('megatron', {}).get('environment_profile', '-')} | "
             f"{row.get('tp', '-')} | {row.get('pp', '-')} | "
             f"{row.get('dp', '-')} | {row.get('repeat_count', 1)} | "
-            f"{row.get('status', '-')} | {formatted_summary(row, 'tokens_per_sec')} | "
+            f"{row.get('status', '-')} | "
+            f"{'yes' if row.get('performance_valid', True) else 'no'} | "
+            f"{formatted_summary(row, 'tokens_per_sec')} | "
             f"{formatted_summary(row, 'step_time_ms')} | "
             f"{formatted_summary(row, 'peak_device_memory_mb')} | "
             f"{row.get('runtime', {}).get('pipeline_bubble_proxy', '-')} | "
@@ -537,6 +566,7 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
             "`Tokens/sec` 由 global batch、sequence length 与测量 step 均值推导；设备显存来自",
             "独占 GPU 条件下的 `nvidia-smi` 设备级采样，不等同于 PyTorch allocator 指标。",
             "Pipeline bubble 仅给出 fill-drain 理论 proxy；没有 trace 时不声称观察到 idle。",
+            "兼容性 smoke 的原始指标保留在 JSON 供审计，但 Markdown 不展示为性能结论。",
         ]
     )
     return "\n".join(lines) + "\n"

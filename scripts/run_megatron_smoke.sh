@@ -27,6 +27,7 @@ VOCAB_SIZE="${VOCAB_SIZE:-32768}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-1200}"
 TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-local}"
 SEQUENCE_PARALLEL="${SEQUENCE_PARALLEL:-auto}"
+EVIDENCE_MODE="${EVIDENCE_MODE:-formal}"
 
 if [[ "${OUT_DIR}" == /* || "/${OUT_DIR}/" == *"/../"* ]]; then
   echo "OUT_DIR 必须是当前仓库下的相对路径" >&2
@@ -34,6 +35,10 @@ if [[ "${OUT_DIR}" == /* || "/${OUT_DIR}/" == *"/../"* ]]; then
 fi
 if [[ ! -f "${MEGATRON_DIR}/pretrain_gpt.py" ]]; then
   echo "MEGATRON_DIR 中未找到 pretrain_gpt.py: ${MEGATRON_DIR}" >&2
+  exit 2
+fi
+if [[ "${EVIDENCE_MODE}" != "formal" && "${EVIDENCE_MODE}" != "compatibility" ]]; then
+  echo "EVIDENCE_MODE 必须为 formal 或 compatibility" >&2
   exit 2
 fi
 if (( WORLD_SIZE % (TP * PP) != 0 )); then
@@ -70,6 +75,14 @@ elif [[ "${base_image}" == pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256
   environment_profile="pytorch_2_10_official_fallback"
 else
   echo "正式 Megatron 证据必须使用固定 NGC base；官方 PyTorch fallback 需显式启用" >&2
+  exit 2
+fi
+active_compute_process_count="$(
+  nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null \
+    | awk 'NF && $1 !~ /^No/ {count++} END {print count + 0}'
+)"
+if [[ "${EVIDENCE_MODE}" == "formal" ]] && (( active_compute_process_count > 0 )); then
+  echo "检测到 ${active_compute_process_count} 个已有 GPU 计算进程，拒绝生成正式性能结果" >&2
   exit 2
 fi
 if [[ "${SEQUENCE_PARALLEL}" == "auto" ]]; then
@@ -154,12 +167,21 @@ config_json="$(python3 - "${NAME}" "${TRIAL_INDEX}" "${TP}" "${PP}" "${DP}" \
   "${NUM_LAYERS}" "${HIDDEN_SIZE}" "${NUM_HEADS}" "${VOCAB_SIZE}" \
   "${MEASURED_ITERS}" "${WARMUP_ITERS}" "${MEGATRON_REF}" \
   "${MEGATRON_COMMIT}" "${core_version}" "${base_image}" "${TRANSFORMER_IMPL}" \
-  "${environment_profile}" "${sequence_parallel}" <<'PY'
+  "${environment_profile}" "${sequence_parallel}" "${EVIDENCE_MODE}" \
+  "${active_compute_process_count}" <<'PY'
 import json
 import sys
 
 (name, trial, tp, pp, dp, world, micro, glob, seq, layers, hidden, heads, vocab,
- measured, warmup, ref, commit, core, base, impl, profile, sequence_parallel) = sys.argv[1:]
+ measured, warmup, ref, commit, core, base, impl, profile, sequence_parallel,
+ evidence_mode, active_processes) = sys.argv[1:]
+invalid_reasons = []
+if evidence_mode != "formal":
+    invalid_reasons.append("compatibility_smoke")
+if profile != "ngc_pytorch_26_01":
+    invalid_reasons.append("non_ngc_fallback_environment")
+if int(active_processes) > 0:
+    invalid_reasons.append("concurrent_gpu_compute_processes")
 print(json.dumps({
     "name": name, "trial_index": int(trial),
     "tp": int(tp), "pp": int(pp), "dp": int(dp), "world_size": int(world),
@@ -171,6 +193,10 @@ print(json.dumps({
                      "sequence_length": int(seq)},
     "batch_config": {"micro_batch_size": int(micro),
                      "global_batch_size": int(glob)},
+    "evidence_mode": evidence_mode,
+    "performance_valid": not invalid_reasons,
+    "performance_invalid_reasons": invalid_reasons,
+    "preexisting_gpu_compute_process_count": int(active_processes),
     "megatron": {"ref": ref, "commit": commit, "core_version": core,
                  "ngc_base_image": base, "transformer_impl": impl,
                  "environment_profile": profile,
