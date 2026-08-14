@@ -494,10 +494,13 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
         ),
         "",
         (
-            "| 配置 | TP | PP | DP | Repeat | 状态 | Tokens/sec | Step (ms) | "
+            "| 配置 | 环境 | TP | PP | DP | Repeat | 状态 | Tokens/sec | Step (ms) | "
             "设备峰值显存 (MB) | 理论 bubble proxy | 失败原因 |"
         ),
-        "| --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |",
+        (
+            "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | "
+            "---: | ---: | --- |"
+        ),
     ]
 
     def formatted_summary(row: dict[str, Any], name: str) -> str:
@@ -509,7 +512,9 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
 
     for row in rows:
         lines.append(
-            f"| {row.get('name', '-')} | {row.get('tp', '-')} | {row.get('pp', '-')} | "
+            f"| {row.get('name', '-')} | "
+            f"{row.get('megatron', {}).get('environment_profile', '-')} | "
+            f"{row.get('tp', '-')} | {row.get('pp', '-')} | "
             f"{row.get('dp', '-')} | {row.get('repeat_count', 1)} | "
             f"{row.get('status', '-')} | {formatted_summary(row, 'tokens_per_sec')} | "
             f"{formatted_summary(row, 'step_time_ms')} | "

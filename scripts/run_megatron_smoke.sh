@@ -62,8 +62,13 @@ if [[ "${build_revision}" != "${revision}" && "${ALLOW_UNVERIFIED_PROVENANCE:-0}
   echo "Megatron 镜像 build revision 与源码 HEAD 不一致，请重新构建镜像" >&2
   exit 2
 fi
-if [[ "${base_image}" != nvcr.io/nvidia/pytorch:26.01-py3@sha256:* ]]; then
-  echo "正式 Megatron 证据必须使用固定 NGC base digest" >&2
+if [[ "${base_image}" == nvcr.io/nvidia/pytorch:26.01-py3@sha256:* ]]; then
+  environment_profile="ngc_pytorch_26_01"
+elif [[ "${base_image}" == pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:* && \
+        "${ALLOW_PYTORCH_FALLBACK:-0}" == "1" ]]; then
+  environment_profile="pytorch_2_10_official_fallback"
+else
+  echo "正式 Megatron 证据必须使用固定 NGC base；官方 PyTorch fallback 需显式启用" >&2
   exit 2
 fi
 
@@ -133,12 +138,13 @@ config_json="$(python3 - "${NAME}" "${TRIAL_INDEX}" "${TP}" "${PP}" "${DP}" \
   "${WORLD_SIZE}" "${MICRO_BATCH_SIZE}" "${GLOBAL_BATCH_SIZE}" "${SEQ_LENGTH}" \
   "${NUM_LAYERS}" "${HIDDEN_SIZE}" "${NUM_HEADS}" "${VOCAB_SIZE}" \
   "${MEASURED_ITERS}" "${WARMUP_ITERS}" "${MEGATRON_REF}" \
-  "${MEGATRON_COMMIT}" "${core_version}" "${base_image}" "${TRANSFORMER_IMPL}" <<'PY'
+  "${MEGATRON_COMMIT}" "${core_version}" "${base_image}" "${TRANSFORMER_IMPL}" \
+  "${environment_profile}" <<'PY'
 import json
 import sys
 
 (name, trial, tp, pp, dp, world, micro, glob, seq, layers, hidden, heads, vocab,
- measured, warmup, ref, commit, core, base, impl) = sys.argv[1:]
+ measured, warmup, ref, commit, core, base, impl, profile) = sys.argv[1:]
 print(json.dumps({
     "name": name, "trial_index": int(trial),
     "tp": int(tp), "pp": int(pp), "dp": int(dp), "world_size": int(world),
@@ -152,6 +158,7 @@ print(json.dumps({
                      "global_batch_size": int(glob)},
     "megatron": {"ref": ref, "commit": commit, "core_version": core,
                  "ngc_base_image": base, "transformer_impl": impl,
+                 "environment_profile": profile,
                  "distributed_optimizer": True, "sequence_parallel": int(tp) > 1},
 }, separators=(",", ":")))
 PY
