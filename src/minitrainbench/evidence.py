@@ -16,6 +16,7 @@ DEPENDENCY_PATTERNS = (
     "no module named",
     "no such file or directory",
     "failed to compile the c++ dataset helper",
+    "please install te",
 )
 
 

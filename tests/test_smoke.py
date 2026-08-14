@@ -499,6 +499,10 @@ def test_evidence_failure_and_log_parsing(tmp_path) -> None:
         "failed",
         "外部运行环境缺少依赖或编译工具",
     )
+    assert classify_failure(1, "Please install TE >= 1.4") == (
+        "failed",
+        "外部运行环境缺少依赖或编译工具",
+    )
     assert classify_failure(0, "ok") == ("success", "")
 
     log = """

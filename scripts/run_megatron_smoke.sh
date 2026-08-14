@@ -99,7 +99,7 @@ megatron_args=(
   --bf16 --tensor-model-parallel-size "${TP}" --pipeline-model-parallel-size "${PP}"
   --use-distributed-optimizer --overlap-grad-reduce --overlap-param-gather
   --normalization RMSNorm --swiglu --disable-bias-linear
-  --untie-embeddings-and-output-weights --position-embedding-type rope
+  --untie-embeddings-and-output-weights --position-embedding-type rope --no-rope-fusion
   --attention-dropout 0.0 --hidden-dropout 0.0
   --transformer-impl "${TRANSFORMER_IMPL}" --distributed-backend nccl
   --eval-iters 0 --eval-interval 100000 --log-interval 1 --log-throughput
