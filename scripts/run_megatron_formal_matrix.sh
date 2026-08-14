@@ -50,6 +50,7 @@ revision="$(minitrainbench_repo_revision)"
 base_image="$(docker image inspect "${MEGATRON_IMAGE}" --format '{{index .Config.Labels "org.opencontainers.image.base.name"}}')"
 build_revision="$(docker image inspect "${MEGATRON_IMAGE}" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
 core_version="$(docker image inspect "${MEGATRON_IMAGE}" --format '{{index .Config.Labels "io.minitrainbench.megatron-core.version"}}')"
+nvrx_version="$(docker image inspect "${MEGATRON_IMAGE}" --format '{{index .Config.Labels "io.minitrainbench.nvidia-resiliency-ext.version"}}')"
 megatron_commit="$(git -C "${MEGATRON_DIR}" rev-parse HEAD)"
 megatron_ref_commit="$(git -C "${MEGATRON_DIR}" rev-parse "${MEGATRON_REF}^{commit}")"
 
@@ -63,6 +64,10 @@ if [[ "${build_revision}" != "${revision}" ]]; then
 fi
 if [[ "${core_version}" != "0.18.2" ]]; then
   echo "Megatron Core 版本必须为 0.18.2" >&2
+  exit 2
+fi
+if [[ "${nvrx_version}" != "0.6.0" ]]; then
+  echo "nvidia-resiliency-ext 版本必须为 0.6.0" >&2
   exit 2
 fi
 if [[ "${megatron_commit}" != "${EXPECTED_MEGATRON_COMMIT}" || \
@@ -90,6 +95,7 @@ import megatron.core
 
 assert torch.cuda.device_count() == 8, torch.cuda.device_count()
 assert importlib.metadata.version("megatron-core") == "0.18.2"
+assert importlib.metadata.version("nvidia-resiliency-ext") == "0.6.0"
 print("NGC/TE/Apex/Megatron preflight passed")
 PY
 

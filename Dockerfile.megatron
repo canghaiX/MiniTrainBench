@@ -7,6 +7,7 @@ ARG BUILD_DATE=unknown
 ARG SOURCE_URL=https://github.com/canghaiX/MiniTrainBench
 ARG MEGATRON_CORE_VERSION=0.18.2
 ARG PYBIND11_VERSION=2.13.6
+ARG NVRX_VERSION=0.6.0
 
 ENV PIP_CONSTRAINT= \
     PIP_NO_CACHE_DIR=1 \
@@ -26,7 +27,8 @@ RUN --mount=type=secret,id=https_proxy,required=false \
       build-essential; \
     rm -rf /var/lib/apt/lists/*; \
     python3 -m pip install \
-      "megatron-core[training]==${MEGATRON_CORE_VERSION}" tensorboard
+      "megatron-core[training]==${MEGATRON_CORE_VERSION}" \
+      "nvidia-resiliency-ext==${NVRX_VERSION}" "click<8.3" tensorboard
 
 RUN --mount=type=secret,id=https_proxy,required=false \
     if [ -f /run/secrets/https_proxy ]; then \
@@ -41,7 +43,8 @@ LABEL org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.base.name="${BASE_IMAGE}" \
-      io.minitrainbench.megatron-core.version="${MEGATRON_CORE_VERSION}"
+      io.minitrainbench.megatron-core.version="${MEGATRON_CORE_VERSION}" \
+      io.minitrainbench.nvidia-resiliency-ext.version="${NVRX_VERSION}"
 
 ENV MINITRAINBENCH_BASE_IMAGE="${BASE_IMAGE}" \
     MINITRAINBENCH_BUILD_REVISION="${VCS_REF}"
