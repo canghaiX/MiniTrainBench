@@ -17,6 +17,7 @@ DEPENDENCY_PATTERNS = (
     "no such file or directory",
     "failed to compile the c++ dataset helper",
     "please install te",
+    "must install apex",
 )
 
 

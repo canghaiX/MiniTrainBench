@@ -98,7 +98,8 @@ megatron_args=(
   --weight-decay 0.1 --clip-grad 1.0 --adam-beta1 0.9 --adam-beta2 0.95
   --bf16 --tensor-model-parallel-size "${TP}" --pipeline-model-parallel-size "${PP}"
   --use-distributed-optimizer --overlap-grad-reduce --overlap-param-gather
-  --normalization RMSNorm --no-persist-layer-norm --swiglu --disable-bias-linear
+  --normalization RMSNorm --no-persist-layer-norm --no-gradient-accumulation-fusion
+  --swiglu --disable-bias-linear
   --untie-embeddings-and-output-weights --position-embedding-type rope --no-rope-fusion
   --attention-dropout 0.0 --hidden-dropout 0.0
   --transformer-impl "${TRANSFORMER_IMPL}" --distributed-backend nccl
