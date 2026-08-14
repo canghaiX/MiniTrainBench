@@ -26,6 +26,7 @@ NUM_HEADS="${NUM_HEADS:-16}"
 VOCAB_SIZE="${VOCAB_SIZE:-32768}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-1200}"
 TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-local}"
+SEQUENCE_PARALLEL="${SEQUENCE_PARALLEL:-auto}"
 
 if [[ "${OUT_DIR}" == /* || "/${OUT_DIR}/" == *"/../"* ]]; then
   echo "OUT_DIR 必须是当前仓库下的相对路径" >&2
@@ -71,6 +72,18 @@ else
   echo "正式 Megatron 证据必须使用固定 NGC base；官方 PyTorch fallback 需显式启用" >&2
   exit 2
 fi
+if [[ "${SEQUENCE_PARALLEL}" == "auto" ]]; then
+  if (( TP > 1 )) && [[ "${environment_profile}" == "ngc_pytorch_26_01" ]]; then
+    sequence_parallel=1
+  else
+    sequence_parallel=0
+  fi
+elif [[ "${SEQUENCE_PARALLEL}" == "1" || "${SEQUENCE_PARALLEL}" == "0" ]]; then
+  sequence_parallel="${SEQUENCE_PARALLEL}"
+else
+  echo "SEQUENCE_PARALLEL 必须为 auto、0 或 1" >&2
+  exit 2
+fi
 
 mkdir -p "${OUT_DIR}/logs" "${OUT_DIR}/records" "${OUT_DIR}/tensorboard"
 trial_name="${NAME}_trial$(printf '%02d' "${TRIAL_INDEX}")"
@@ -107,7 +120,7 @@ megatron_args=(
   --tensorboard-dir "/workspace/${OUT_DIR}/tensorboard/${trial_name}"
   --log-timers-to-tensorboard --log-memory-to-tensorboard
 )
-if (( TP > 1 )); then
+if (( sequence_parallel == 1 )); then
   megatron_args+=(--sequence-parallel)
 fi
 command=(
@@ -141,12 +154,12 @@ config_json="$(python3 - "${NAME}" "${TRIAL_INDEX}" "${TP}" "${PP}" "${DP}" \
   "${NUM_LAYERS}" "${HIDDEN_SIZE}" "${NUM_HEADS}" "${VOCAB_SIZE}" \
   "${MEASURED_ITERS}" "${WARMUP_ITERS}" "${MEGATRON_REF}" \
   "${MEGATRON_COMMIT}" "${core_version}" "${base_image}" "${TRANSFORMER_IMPL}" \
-  "${environment_profile}" <<'PY'
+  "${environment_profile}" "${sequence_parallel}" <<'PY'
 import json
 import sys
 
 (name, trial, tp, pp, dp, world, micro, glob, seq, layers, hidden, heads, vocab,
- measured, warmup, ref, commit, core, base, impl, profile) = sys.argv[1:]
+ measured, warmup, ref, commit, core, base, impl, profile, sequence_parallel) = sys.argv[1:]
 print(json.dumps({
     "name": name, "trial_index": int(trial),
     "tp": int(tp), "pp": int(pp), "dp": int(dp), "world_size": int(world),
@@ -161,7 +174,8 @@ print(json.dumps({
     "megatron": {"ref": ref, "commit": commit, "core_version": core,
                  "ngc_base_image": base, "transformer_impl": impl,
                  "environment_profile": profile,
-                 "distributed_optimizer": True, "sequence_parallel": int(tp) > 1},
+                 "distributed_optimizer": True,
+                 "sequence_parallel": bool(int(sequence_parallel))},
 }, separators=(",", ":")))
 PY
 )"
