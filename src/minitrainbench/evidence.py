@@ -14,6 +14,18 @@ from typing import Any
 OOM_PATTERNS = ("out of memory", "cuda out of memory", "cublas_status_alloc_failed")
 
 
+def _summary(values: Iterable[float]) -> dict[str, float]:
+    samples = [float(value) for value in values]
+    if not samples:
+        raise ValueError("至少需要一个样本")
+    return {
+        "mean": statistics.fmean(samples),
+        "std": statistics.stdev(samples) if len(samples) > 1 else 0.0,
+        "min": min(samples),
+        "max": max(samples),
+    }
+
+
 def validate_megatron_config(
     *,
     world_size: int,
@@ -134,6 +146,246 @@ def parse_megatron_log(text: str) -> dict[str, Any]:
     return result
 
 
+def parse_device_memory_samples(path: str | None) -> dict[str, Any] | None:
+    """解析 nvidia-smi 设备显存采样，显式区分基线、峰值和增量。"""
+    if not path or not Path(path).is_file():
+        return None
+    devices: dict[int, dict[str, list[float]]] = {}
+    for line in Path(path).read_text(errors="replace").splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) != 4 or fields[0] not in {"baseline", "sample"}:
+            continue
+        try:
+            index = int(fields[2])
+            memory_mb = float(fields[3])
+        except ValueError:
+            continue
+        devices.setdefault(index, {"baseline": [], "sample": []})[fields[0]].append(
+            memory_mb
+        )
+    rows = []
+    for index, samples in sorted(devices.items()):
+        baseline_values = samples["baseline"]
+        measured_values = samples["sample"]
+        if not baseline_values or not measured_values:
+            continue
+        baseline = baseline_values[0]
+        peak = max(measured_values)
+        rows.append(
+            {
+                "device_index": index,
+                "baseline_device_memory_mb": baseline,
+                "peak_device_memory_mb": peak,
+                "peak_device_memory_delta_mb": max(0.0, peak - baseline),
+            }
+        )
+    if not rows:
+        return None
+    return {
+        "source": "nvidia_smi_device_used_memory",
+        "devices": rows,
+        "peak_device_memory_mb": max(row["peak_device_memory_mb"] for row in rows),
+        "peak_device_memory_delta_mb": max(
+            row["peak_device_memory_delta_mb"] for row in rows
+        ),
+    }
+
+
+def build_megatron_trial_record(
+    *,
+    config: dict[str, Any],
+    log_text: str,
+    returncode: int,
+    command: str,
+    environment: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
+    memory_samples_path: str | None = None,
+) -> dict[str, Any]:
+    """构造单次 Megatron trial 的公开、可审计记录。"""
+    status, reason = classify_failure(returncode, log_text)
+    is_timeout = (
+        returncode == 124
+        or "timeout" in log_text.lower()
+        or "watchdog" in log_text.lower()
+    )
+    if is_timeout:
+        status = "timeout"
+    parsed = parse_megatron_log(log_text)
+    measured_iters = int(config.get("measured_iters", 0))
+    all_step_samples = parsed.get("step_time_ms_samples", [])
+    measured_steps = all_step_samples[-measured_iters:] if measured_iters > 0 else []
+    metrics: dict[str, Any] = {
+        "step_sample_count": len(measured_steps),
+        "step_time_ms": None,
+        "step_time_ms_summary": None,
+        "tokens_per_sec": None,
+        "tokens_per_sec_source": None,
+        "parameters": parsed.get("parameters"),
+    }
+    if measured_steps:
+        step_summary = _summary(measured_steps)
+        metrics["step_time_ms"] = step_summary["mean"]
+        metrics["step_time_ms_summary"] = step_summary
+        metrics["tokens_per_sec"] = (
+            int(config["global_batch_size"])
+            * int(config["seq_length"])
+            / (step_summary["mean"] / 1000)
+        )
+        metrics["tokens_per_sec_source"] = (
+            "derived_global_batch_seq_length_over_mean_step_time"
+        )
+    memory = parse_device_memory_samples(memory_samples_path)
+    if memory:
+        metrics.update(
+            {
+                "peak_device_memory_mb": memory["peak_device_memory_mb"],
+                "peak_device_memory_delta_mb": memory[
+                    "peak_device_memory_delta_mb"
+                ],
+                "device_memory": memory["devices"],
+                "memory_source": memory["source"],
+            }
+        )
+    if status == "success" and len(measured_steps) != measured_iters:
+        status = "failed_parse"
+        reason = (
+            f"期望 {measured_iters} 个测量 step，日志中仅找到 "
+            f"{len(measured_steps)} 个"
+        )
+    dp = int(config["dp"])
+    pp = int(config["pp"])
+    micro_batches = int(config["global_batch_size"]) // (
+        int(config["micro_batch_size"]) * dp
+    )
+    bubble_proxy = (pp - 1) / (micro_batches + pp - 1)
+    record = {
+        "benchmark": "megatron",
+        **config,
+        "status": status,
+        "failure_reason": reason or None,
+        "returncode": returncode,
+        "metrics": metrics,
+        "runtime": {
+            "micro_batches_per_iteration": micro_batches,
+            "pipeline_bubble_proxy": bubble_proxy,
+            "pipeline_bubble_proxy_source": "theoretical_fill_drain_approximation",
+            "pipeline_idle_observed": "not_determined_without_trace",
+        },
+        "command": command.strip(),
+        "log_sha256": hashlib.sha256(log_text.encode()).hexdigest(),
+        "environment": environment,
+        "provenance": provenance,
+    }
+    return record
+
+
+def aggregate_megatron_trials(
+    trials: Iterable[dict[str, Any]], *, expected_repeats: int
+) -> dict[str, Any]:
+    """聚合同一 TP/PP/DP 配置的独立进程 trial。"""
+    rows = list(trials)
+    if not rows:
+        raise ValueError("Megatron 聚合至少需要一个 trial")
+    first = rows[0]
+    topology = (
+        first.get("tp"),
+        first.get("pp"),
+        first.get("dp"),
+        first.get("world_size"),
+    )
+    if any(
+        (row.get("tp"), row.get("pp"), row.get("dp"), row.get("world_size"))
+        != topology
+        for row in rows[1:]
+    ):
+        raise ValueError("不能聚合 TP/PP/DP/world size 不一致的 Megatron trial")
+    statuses = [str(row.get("status")) for row in rows]
+    successful = [row for row in rows if row.get("status") == "success"]
+    complete = len(rows) == expected_repeats and len(successful) == expected_repeats
+    if complete:
+        status = "success"
+        reason = None
+    elif successful:
+        status = "partial"
+        reason = f"{len(successful)}/{expected_repeats} 个 trial 成功"
+    elif "oom" in statuses:
+        status = "oom"
+        reason = "全部 trial 未成功，至少一个 trial OOM"
+    elif "failed_parse" in statuses:
+        status = "failed_parse"
+        reason = "全部 trial 未成功，至少一个 trial 无法解析完整指标"
+    elif "timeout" in statuses:
+        status = "timeout"
+        reason = "全部 trial 未成功，至少一个 trial 超时"
+    else:
+        status = "failed"
+        reason = "全部 trial 均失败"
+    summary: dict[str, Any] = {}
+    metric_names = (
+        "tokens_per_sec",
+        "step_time_ms",
+        "peak_device_memory_mb",
+        "peak_device_memory_delta_mb",
+    )
+    for name in metric_names:
+        values = [
+            row.get("metrics", {}).get(name)
+            for row in successful
+            if row.get("metrics", {}).get(name) is not None
+        ]
+        if values:
+            summary[name] = _summary(values)
+    return {
+        "benchmark": "megatron",
+        "name": first.get("name"),
+        "tp": first.get("tp"),
+        "pp": first.get("pp"),
+        "dp": first.get("dp"),
+        "world_size": first.get("world_size"),
+        "precision": first.get("precision", "bf16"),
+        "model_config": first.get("model_config"),
+        "batch_config": first.get("batch_config"),
+        "runtime": first.get("runtime"),
+        "status": status,
+        "failure_reason": reason,
+        "repeat_count": len(rows),
+        "expected_repeat_count": expected_repeats,
+        "trial_protocol": "independent_process_restart",
+        "summary": summary,
+        "trials": [
+            {
+                "trial_index": row.get("trial_index"),
+                "status": row.get("status"),
+                "failure_reason": row.get("failure_reason"),
+                "metrics": row.get("metrics"),
+                "log_sha256": row.get("log_sha256"),
+                "command": row.get("command"),
+            }
+            for row in rows
+        ],
+        "environment": first.get("environment"),
+        "provenance": first.get("provenance"),
+        "megatron": first.get("megatron"),
+    }
+
+
+def public_result_violations(payload: dict[str, Any]) -> list[str]:
+    """检查公开结果中不应出现的凭据、代理和宿主机私有路径。"""
+    serialized = json.dumps(payload, ensure_ascii=False).lower()
+    checks = {
+        "ngc_api_key": "NGC API Key",
+        "https_proxy": "代理变量",
+        "http_proxy": "代理变量",
+        "_json_key": "NGC 登录用户名",
+        "/data/external/": "外部源码绝对路径",
+        "/root/.docker/": "Docker 凭据路径",
+    }
+    violations = {label for pattern, label in checks.items() if pattern in serialized}
+    if re.search(r"https?://[^/\s:@]+:[^@\s]+@", serialized):
+        violations.add("URL 内嵌凭据")
+    return sorted(violations)
+
+
 def render_memory_pressure(records: Iterable[dict[str, Any]]) -> str:
     rows = list(records)
     tier_parameters = {
@@ -241,22 +493,36 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
             "日志解析结果和失败原因。"
         ),
         "",
-        "| 配置 | TP | PP | DP | 状态 | Tokens/sec | Step (ms) | Peak memory (MB) | 失败原因 |",
-        "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |",
+        (
+            "| 配置 | TP | PP | DP | Repeat | 状态 | Tokens/sec | Step (ms) | "
+            "设备峰值显存 (MB) | 理论 bubble proxy | 失败原因 |"
+        ),
+        "| --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |",
     ]
+
+    def formatted_summary(row: dict[str, Any], name: str) -> str:
+        summary = row.get("summary", {}).get(name)
+        if summary:
+            return f"{summary['mean']:.2f} +/- {summary['std']:.2f}"
+        value = row.get("metrics", {}).get(name)
+        return f"{float(value):.2f}" if value is not None else "-"
+
     for row in rows:
-        metrics = row.get("metrics", {})
         lines.append(
             f"| {row.get('name', '-')} | {row.get('tp', '-')} | {row.get('pp', '-')} | "
-            f"{row.get('dp', '-')} | {row.get('status', '-')} | "
-            f"{metrics.get('tokens_per_sec') or '-'} | {metrics.get('step_time_ms') or '-'} | "
-            f"{metrics.get('max_memory_mb') or '-'} | {row.get('failure_reason') or '-'} |"
+            f"{row.get('dp', '-')} | {row.get('repeat_count', 1)} | "
+            f"{row.get('status', '-')} | {formatted_summary(row, 'tokens_per_sec')} | "
+            f"{formatted_summary(row, 'step_time_ms')} | "
+            f"{formatted_summary(row, 'peak_device_memory_mb')} | "
+            f"{row.get('runtime', {}).get('pipeline_bubble_proxy', '-')} | "
+            f"{row.get('failure_reason') or '-'} |"
         )
     lines.extend(
         [
             "",
-            "没有真实数据集和完整生产配置；本实验只用于验证并行组、启动参数和性能指标链路。",
-            "解析缺失字段显示为 `-`，不把日志无法证明的指标写入结论。",
+            "`Tokens/sec` 由 global batch、sequence length 与测量 step 均值推导；设备显存来自",
+            "独占 GPU 条件下的 `nvidia-smi` 设备级采样，不等同于 PyTorch allocator 指标。",
+            "Pipeline bubble 仅给出 fill-drain 理论 proxy；没有 trace 时不声称观察到 idle。",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -336,7 +602,16 @@ def _build_parser() -> argparse.ArgumentParser:
     megatron_record.add_argument("--config-json", required=True)
     megatron_record.add_argument("--log", required=True)
     megatron_record.add_argument("--returncode", required=True, type=int)
+    megatron_record.add_argument("--command", required=True)
+    megatron_record.add_argument("--environment", default=None)
+    megatron_record.add_argument("--provenance", default=None)
+    megatron_record.add_argument("--memory-samples", default=None)
     megatron_record.add_argument("--output", required=True)
+
+    megatron_aggregate = subparsers.add_parser("megatron-aggregate")
+    megatron_aggregate.add_argument("--input", nargs="+", required=True)
+    megatron_aggregate.add_argument("--expected-repeats", required=True, type=int)
+    megatron_aggregate.add_argument("--output", required=True)
 
     megatron_report = subparsers.add_parser("megatron-report")
     megatron_report.add_argument("--input", nargs="+", required=True)
@@ -367,37 +642,27 @@ def main(argv: list[str] | None = None) -> None:
     elif args.action == "megatron-record":
         config = json.loads(args.config_json)
         log_text = Path(args.log).read_text(errors="replace")
-        status, reason = classify_failure(args.returncode, log_text)
-        metrics = parse_megatron_log(log_text)
-        measured_iters = int(config.get("measured_iters", 0))
-        step_samples = metrics.get("step_time_ms_samples", [])
-        if measured_iters > 0 and step_samples:
-            measured_steps = step_samples[-measured_iters:]
-            metrics["step_time_ms"] = statistics.fmean(measured_steps)
-            metrics["step_time_ms_min"] = min(measured_steps)
-            metrics["step_time_ms_max"] = max(measured_steps)
-        if metrics.get("tokens_per_sec") is None and metrics.get("step_time_ms"):
-            metrics["tokens_per_sec"] = (
-                int(config["global_batch_size"])
-                * int(config["seq_length"])
-                / (float(metrics["step_time_ms"]) / 1000)
-            )
-            metrics["tokens_per_sec_source"] = "derived_from_step_time"
-        if status == "success" and not any(
-            metrics.get(name) is not None
-            for name in ("tokens_per_sec", "step_time_ms", "max_memory_mb")
-        ):
-            status = "failed_parse"
-            reason = "命令成功，但日志中未找到性能指标"
-        record = {
-            "benchmark": "megatron",
-            **config,
-            "status": status,
-            "failure_reason": reason or None,
-            "returncode": args.returncode,
-            "metrics": metrics,
-            "log_file": args.log,
-        }
+        record = build_megatron_trial_record(
+            config=config,
+            log_text=log_text,
+            returncode=args.returncode,
+            command=args.command,
+            environment=_read_json(args.environment) if args.environment else None,
+            provenance=_read_json(args.provenance) if args.provenance else None,
+            memory_samples_path=args.memory_samples,
+        )
+        violations = public_result_violations(record)
+        if violations:
+            raise ValueError("公开结果审计失败：" + "、".join(violations))
+        _write(args.output, record)
+    elif args.action == "megatron-aggregate":
+        record = aggregate_megatron_trials(
+            (_read_json(path) for path in args.input),
+            expected_repeats=args.expected_repeats,
+        )
+        violations = public_result_violations(record)
+        if violations:
+            raise ValueError("公开结果审计失败：" + "、".join(violations))
         _write(args.output, record)
     elif args.action == "megatron-report":
         _write(args.output, render_megatron_report(_read_json(path) for path in args.input))

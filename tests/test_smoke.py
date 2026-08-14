@@ -19,9 +19,12 @@ from minitrainbench.data import SyntheticTokenIterator
 from minitrainbench.deepspeed_benchmark import build_deepspeed_config
 from minitrainbench.distributed import DistributedContext
 from minitrainbench.evidence import (
+    aggregate_megatron_trials,
     build_evidence_manifest,
+    build_megatron_trial_record,
     classify_failure,
     parse_megatron_log,
+    public_result_violations,
     render_megatron_report,
     render_memory_pressure,
     training_record,
@@ -617,6 +620,127 @@ def test_megatron_parallel_and_batch_constraints() -> None:
             micro_batch_size=2,
             global_batch_size=6,
         )
+
+
+def _megatron_trial_config(trial_index: int = 1) -> dict:
+    return {
+        "name": "tp2_pp2",
+        "trial_index": trial_index,
+        "tp": 2,
+        "pp": 2,
+        "dp": 2,
+        "world_size": 8,
+        "precision": "bf16",
+        "micro_batch_size": 1,
+        "global_batch_size": 8,
+        "seq_length": 512,
+        "warmup_iters": 2,
+        "measured_iters": 3,
+        "model_config": {"num_layers": 8, "hidden_size": 1024},
+        "batch_config": {"micro_batch_size": 1, "global_batch_size": 8},
+        "megatron": {"ref": "core_v0.18.2", "commit": "a" * 40},
+    }
+
+
+def test_megatron_trial_excludes_warmup_and_derives_throughput(tmp_path) -> None:
+    memory_path = tmp_path / "memory.csv"
+    memory_path.write_text(
+        "baseline,1.0,0,100\n"
+        "baseline,1.0,1,110\n"
+        "sample,2.0,0,900\n"
+        "sample,2.0,1,950\n"
+        "sample,3.0,0,800\n"
+    )
+    log = "\n".join(
+        f"iteration {index} | elapsed time per iteration (ms): {value}"
+        for index, value in enumerate((500, 400, 100, 110, 90), start=1)
+    )
+    record = build_megatron_trial_record(
+        config=_megatron_trial_config(),
+        log_text=log,
+        returncode=0,
+        command="docker run <MEGATRON_DIR>",
+        environment={"torch": "2.10.0"},
+        provenance={"complete": True},
+        memory_samples_path=str(memory_path),
+    )
+
+    assert record["status"] == "success"
+    assert record["metrics"]["step_sample_count"] == 3
+    assert record["metrics"]["step_time_ms"] == pytest.approx(100.0)
+    assert record["metrics"]["step_time_ms_summary"]["min"] == 90.0
+    assert record["metrics"]["tokens_per_sec"] == pytest.approx(40_960.0)
+    assert record["metrics"]["tokens_per_sec_source"].startswith("derived_")
+    assert record["metrics"]["peak_device_memory_mb"] == 950.0
+    assert record["metrics"]["peak_device_memory_delta_mb"] == 840.0
+    assert record["runtime"]["micro_batches_per_iteration"] == 4
+    assert record["runtime"]["pipeline_bubble_proxy"] == pytest.approx(0.2)
+    assert "log_file" not in record
+
+
+def test_megatron_missing_samples_and_repeat_aggregation() -> None:
+    incomplete = build_megatron_trial_record(
+        config=_megatron_trial_config(),
+        log_text="elapsed time per iteration (ms): 100.0\n",
+        returncode=0,
+        command="torchrun",
+    )
+    assert incomplete["status"] == "failed_parse"
+    assert "期望 3" in incomplete["failure_reason"]
+
+    successful = []
+    for trial_index, step_ms in enumerate((100.0, 110.0, 90.0), start=1):
+        config = _megatron_trial_config(trial_index)
+        log = "\n".join(
+            f"elapsed time per iteration (ms): {step_ms}" for _ in range(3)
+        )
+        successful.append(
+            build_megatron_trial_record(
+                config=config,
+                log_text=log,
+                returncode=0,
+                command="torchrun",
+            )
+        )
+    aggregate = aggregate_megatron_trials(successful, expected_repeats=3)
+    assert aggregate["status"] == "success"
+    assert aggregate["trial_protocol"] == "independent_process_restart"
+    assert aggregate["summary"]["step_time_ms"] == {
+        "mean": 100.0,
+        "std": 10.0,
+        "min": 90.0,
+        "max": 110.0,
+    }
+
+    failed = dict(successful[-1], status="oom", failure_reason="CUDA 内存不足")
+    partial = aggregate_megatron_trials(
+        [successful[0], successful[1], failed], expected_repeats=3
+    )
+    assert partial["status"] == "partial"
+    assert partial["repeat_count"] == 3
+    assert "2/3" in partial["failure_reason"]
+
+
+def test_megatron_public_result_audit() -> None:
+    assert public_result_violations({"source": "/data/external/Megatron-LM"}) == [
+        "外部源码绝对路径"
+    ]
+    violations = public_result_violations(
+        {"HTTPS_PROXY": "http://user:password@example.com:80"}
+    )
+    assert "代理变量" in violations
+    assert "URL 内嵌凭据" in violations
+    assert public_result_violations(
+        {"command": "MEGATRON_DIR=/path/to/Megatron-LM torchrun"}
+    ) == []
+
+    timeout = build_megatron_trial_record(
+        config=_megatron_trial_config(),
+        log_text="torch distributed watchdog timeout",
+        returncode=124,
+        command="torchrun",
+    )
+    assert timeout["status"] == "timeout"
 
 
 def test_cpu_doctor_smoke(tmp_path) -> None:
