@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any
 
 OOM_PATTERNS = ("out of memory", "cuda out of memory", "cublas_status_alloc_failed")
+DEPENDENCY_PATTERNS = (
+    "no module named",
+    "no such file or directory",
+    "failed to compile the c++ dataset helper",
+)
 
 
 def _summary(values: Iterable[float]) -> dict[str, float]:
@@ -52,6 +57,8 @@ def classify_failure(returncode: int, output: str) -> tuple[str, str]:
         return "oom", "CUDA 内存不足"
     if "timed out" in text or "watchdog timeout" in text:
         return "failed", "通信或进程超时"
+    if any(pattern in text for pattern in DEPENDENCY_PATTERNS):
+        return "failed", "外部运行环境缺少依赖或编译工具"
     if returncode == 0:
         return "success", ""
     return "failed", "外部训练命令返回非零状态"

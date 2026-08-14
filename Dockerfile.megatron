@@ -6,6 +6,7 @@ ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 ARG SOURCE_URL=https://github.com/canghaiX/MiniTrainBench
 ARG MEGATRON_CORE_VERSION=0.18.2
+ARG PYBIND11_VERSION=2.13.6
 
 LABEL org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.revision="${VCS_REF}" \
@@ -34,6 +35,15 @@ RUN --mount=type=secret,id=https_proxy,required=false \
     rm -rf /var/lib/apt/lists/*; \
     python3 -m pip install \
       "megatron-core[training]==${MEGATRON_CORE_VERSION}" tensorboard
+
+RUN --mount=type=secret,id=https_proxy,required=false \
+    if [ -f /run/secrets/https_proxy ]; then \
+      export HTTPS_PROXY="$(cat /run/secrets/https_proxy)"; \
+      export HTTP_PROXY="${HTTPS_PROXY}"; \
+      export https_proxy="${HTTPS_PROXY}"; \
+      export http_proxy="${HTTPS_PROXY}"; \
+    fi; \
+    python3 -m pip install "pybind11==${PYBIND11_VERSION}"
 
 WORKDIR /megatron
 CMD ["python3", "-c", "import megatron.core; print('Megatron Core ready')"]

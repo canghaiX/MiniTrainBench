@@ -495,6 +495,10 @@ def test_evidence_failure_and_log_parsing(tmp_path) -> None:
         "通信或进程超时",
     )
     assert classify_failure(1, "distributed timeout: 10 minutes")[0] == "failed"
+    assert classify_failure(1, "No module named pybind11") == (
+        "failed",
+        "外部运行环境缺少依赖或编译工具",
+    )
     assert classify_failure(0, "ok") == ("success", "")
 
     log = """
