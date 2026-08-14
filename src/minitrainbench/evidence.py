@@ -53,6 +53,49 @@ def validate_megatron_config(
     return data_parallel
 
 
+def resolve_megatron_execution_profile(
+    *,
+    environment_profile: str,
+    requested_transformer_impl: str,
+    tensor_parallel: int,
+    requested_sequence_parallel: str,
+) -> dict[str, Any]:
+    """解析 Megatron transformer、kernel 和 Sequence Parallel 执行配置。"""
+    if requested_transformer_impl not in {"auto", "local", "transformer_engine"}:
+        raise ValueError("TRANSFORMER_IMPL 必须为 auto、local 或 transformer_engine")
+    if requested_sequence_parallel not in {"auto", "0", "1"}:
+        raise ValueError("SEQUENCE_PARALLEL 必须为 auto、0 或 1")
+    if tensor_parallel < 1:
+        raise ValueError("TP 必须为正数")
+
+    is_ngc = environment_profile == "ngc_pytorch_26_01"
+    resolved_impl = requested_transformer_impl
+    if requested_transformer_impl == "auto":
+        resolved_impl = "transformer_engine" if is_ngc else "local"
+    if resolved_impl == "transformer_engine" and not is_ngc:
+        raise ValueError("Transformer Engine 正式路径要求固定 NGC 26.01 环境")
+
+    if requested_sequence_parallel == "auto":
+        sequence_parallel = tensor_parallel > 1 and resolved_impl == "transformer_engine"
+    else:
+        sequence_parallel = requested_sequence_parallel == "1"
+    if sequence_parallel and tensor_parallel == 1:
+        raise ValueError("Sequence Parallel 要求 TP 大于 1")
+    if sequence_parallel and resolved_impl != "transformer_engine":
+        raise ValueError("local fallback 不启用 Sequence Parallel")
+
+    return {
+        "requested_transformer_impl": requested_transformer_impl,
+        "resolved_transformer_impl": resolved_impl,
+        "kernel_profile": (
+            "transformer_engine_fused"
+            if resolved_impl == "transformer_engine"
+            else "local_unfused"
+        ),
+        "sequence_parallel": sequence_parallel,
+    }
+
+
 def classify_failure(returncode: int, output: str) -> tuple[str, str]:
     text = output.lower()
     if any(pattern in text for pattern in OOM_PATTERNS):
@@ -514,12 +557,13 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
         ),
         "",
         (
-            "| 配置 | 环境 | TP | PP | DP | Repeat | 状态 | 性能可比 | Tokens/sec | Step (ms) | "
-            "设备峰值显存 (MB) | 理论 bubble proxy | 失败原因 |"
+            "| 配置 | 环境 | Transformer | Kernel | SP | TP | PP | DP | Repeat | 状态 | "
+            "性能可比 | Tokens/sec | Step (ms) | 设备峰值显存 (MB) | "
+            "理论 bubble proxy | 失败原因 |"
         ),
         (
-            "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | "
-            "---: | ---: | --- |"
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | "
+            "---: | ---: | ---: | ---: | --- |"
         ),
     ]
 
@@ -547,9 +591,13 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
         return f"{float(value):.2f}" if value is not None else "-"
 
     for row in rows:
+        megatron = row.get("megatron", {})
         lines.append(
             f"| {row.get('name', '-')} | "
-            f"{row.get('megatron', {}).get('environment_profile', '-')} | "
+            f"{megatron.get('environment_profile', '-')} | "
+            f"{megatron.get('resolved_transformer_impl', megatron.get('transformer_impl', '-'))} | "
+            f"{megatron.get('kernel_profile', '-')} | "
+            f"{'on' if megatron.get('sequence_parallel') else 'off'} | "
             f"{row.get('tp', '-')} | {row.get('pp', '-')} | "
             f"{row.get('dp', '-')} | {row.get('repeat_count', 1)} | "
             f"{row.get('status', '-')} | "
@@ -567,6 +615,7 @@ def render_megatron_report(records: Iterable[dict[str, Any]]) -> str:
             "独占 GPU 条件下的 `nvidia-smi` 设备级采样，不等同于 PyTorch allocator 指标。",
             "Pipeline bubble 仅给出 fill-drain 理论 proxy；没有 trace 时不声称观察到 idle。",
             "兼容性 smoke 的原始指标保留在 JSON 供审计，但 Markdown 不展示为性能结论。",
+            "Transformer Engine 与 Apex 版本记录在 JSON 的 `environment` 字段中。",
         ]
     )
     return "\n".join(lines) + "\n"

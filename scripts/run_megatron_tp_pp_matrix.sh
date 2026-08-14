@@ -7,7 +7,8 @@ MATRIX="${MATRIX:-1:1 2:1 4:1 2:2 1:4}"
 REPEAT="${REPEAT:-3}"
 MEGATRON_REF="${MEGATRON_REF:-core_v0.18.2}"
 MEGATRON_IMAGE="${MEGATRON_IMAGE:-minitrainbench:megatron}"
-TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-local}"
+TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-auto}"
+SEQUENCE_PARALLEL="${SEQUENCE_PARALLEL:-auto}"
 EVIDENCE_MODE="${EVIDENCE_MODE:-formal}"
 mkdir -p "${OUT_DIR}/records"
 
@@ -22,7 +23,9 @@ for item in "${matrix_items[@]}"; do
   for ((trial = 1; trial <= REPEAT; trial++)); do
     MEGATRON_DIR="${MEGATRON_DIR}" MEGATRON_REF="${MEGATRON_REF}" \
       MEGATRON_IMAGE="${MEGATRON_IMAGE}" TRANSFORMER_IMPL="${TRANSFORMER_IMPL}" \
-      EVIDENCE_MODE="${EVIDENCE_MODE}" \
+      SEQUENCE_PARALLEL="${SEQUENCE_PARALLEL}" EVIDENCE_MODE="${EVIDENCE_MODE}" \
+      MEASURED_ITERS="${MEASURED_ITERS:-20}" WARMUP_ITERS="${WARMUP_ITERS:-5}" \
+      TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-1200}" \
       OUT_DIR="${OUT_DIR}" TP="${tp}" PP="${pp}" NAME="${name}" \
       TRIAL_INDEX="${trial}" scripts/run_megatron_smoke.sh || true
     trial_record="${OUT_DIR}/records/${name}_trial$(printf '%02d' "${trial}").json"
@@ -70,7 +73,7 @@ manifest = {
     "benchmark": "megatron_matrix",
     "status": (
         "success" if performance_valid else
-        "compatibility_smoke" if all_complete else
+        "compatibility_smoke" if all_complete and records[0].get("evidence_mode") == "compatibility" else
         "partial" if successful else "failed"
     ),
     "execution_complete": all_complete,
@@ -89,6 +92,13 @@ manifest = {
             "name": row.get("name"),
             "status": row.get("status"),
             "repeat_count": row.get("repeat_count"),
+            "performance_valid": row.get("performance_valid"),
+            "transformer_impl": row.get("megatron", {}).get(
+                "resolved_transformer_impl",
+                row.get("megatron", {}).get("transformer_impl"),
+            ),
+            "kernel_profile": row.get("megatron", {}).get("kernel_profile"),
+            "sequence_parallel": row.get("megatron", {}).get("sequence_parallel"),
         }
         for path, row in zip(record_paths, records, strict=True)
     ],
@@ -96,7 +106,7 @@ manifest = {
 (out_dir / "manifest.json").write_text(
     json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 )
-sys.exit(0 if all_complete else 1)
+sys.exit(0 if all_complete and (performance_valid or records[0].get("evidence_mode") == "compatibility") else 1)
 PY
 status=$?
 printf 'Megatron 矩阵结果: %s\n' "${OUT_DIR}/report.md"

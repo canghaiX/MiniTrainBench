@@ -27,6 +27,7 @@ from minitrainbench.evidence import (
     public_result_violations,
     render_megatron_report,
     render_memory_pressure,
+    resolve_megatron_execution_profile,
     training_record,
     validate_megatron_config,
 )
@@ -604,11 +605,19 @@ number of parameters: 1000000
                 "dp": 2,
                 "status": "success",
                 "metrics": metrics,
+                "megatron": {
+                    "environment_profile": "ngc_pytorch_26_01",
+                    "resolved_transformer_impl": "transformer_engine",
+                    "kernel_profile": "transformer_engine_fused",
+                    "sequence_parallel": True,
+                },
             }
         ]
     )
     assert "tp2_pp2" in megatron_report
     assert "4096.0" in megatron_report
+    assert "transformer_engine_fused" in megatron_report
+    assert "| on |" in megatron_report
     compatibility_report = render_megatron_report(
         [
             {
@@ -647,6 +656,44 @@ def test_megatron_parallel_and_batch_constraints() -> None:
             pipeline_parallel=2,
             micro_batch_size=2,
             global_batch_size=6,
+        )
+
+
+def test_megatron_execution_profile_resolution() -> None:
+    ngc = resolve_megatron_execution_profile(
+        environment_profile="ngc_pytorch_26_01",
+        requested_transformer_impl="auto",
+        tensor_parallel=2,
+        requested_sequence_parallel="auto",
+    )
+    assert ngc == {
+        "requested_transformer_impl": "auto",
+        "resolved_transformer_impl": "transformer_engine",
+        "kernel_profile": "transformer_engine_fused",
+        "sequence_parallel": True,
+    }
+    fallback = resolve_megatron_execution_profile(
+        environment_profile="pytorch_2_10_official_fallback",
+        requested_transformer_impl="auto",
+        tensor_parallel=4,
+        requested_sequence_parallel="auto",
+    )
+    assert fallback["resolved_transformer_impl"] == "local"
+    assert fallback["kernel_profile"] == "local_unfused"
+    assert fallback["sequence_parallel"] is False
+    with pytest.raises(ValueError, match="固定 NGC"):
+        resolve_megatron_execution_profile(
+            environment_profile="pytorch_2_10_official_fallback",
+            requested_transformer_impl="transformer_engine",
+            tensor_parallel=2,
+            requested_sequence_parallel="auto",
+        )
+    with pytest.raises(ValueError, match="TP 大于 1"):
+        resolve_megatron_execution_profile(
+            environment_profile="ngc_pytorch_26_01",
+            requested_transformer_impl="transformer_engine",
+            tensor_parallel=1,
+            requested_sequence_parallel="1",
         )
 
 
