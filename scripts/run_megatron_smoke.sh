@@ -121,6 +121,7 @@ trial_name="${NAME}_trial$(printf '%02d' "${TRIAL_INDEX}")"
 LOG_PATH="${OUT_DIR}/logs/${trial_name}.log"
 MEMORY_PATH="${OUT_DIR}/logs/${trial_name}.memory.csv"
 ENVIRONMENT_PATH="${OUT_DIR}/logs/${trial_name}.environment.json"
+ENVIRONMENT_RAW_PATH="${ENVIRONMENT_PATH}.raw"
 PROVENANCE_PATH="${OUT_DIR}/logs/${trial_name}.provenance.json"
 RECORD_PATH="${OUT_DIR}/records/${trial_name}.json"
 TRAIN_ITERS=$((WARMUP_ITERS + MEASURED_ITERS))
@@ -147,7 +148,7 @@ def dependency(distribution, module):
     return {"available": True, "version": str(version), "error": None}
 
 
-print(json.dumps({
+print("MINITRAINBENCH_ENVIRONMENT_JSON=" + json.dumps({
     "python": platform.python_version(),
     "torch": torch.__version__,
     "cuda": torch.version.cuda,
@@ -167,7 +168,23 @@ PY
 )"
 docker run --rm --gpus all --ipc=host --network=host \
   -v "${MEGATRON_DIR}:/megatron:ro" -e PYTHONPATH=/megatron \
-  -w /megatron "${MEGATRON_IMAGE}" python3 -c "${probe}" >"${ENVIRONMENT_PATH}"
+  -w /megatron "${MEGATRON_IMAGE}" python3 -c "${probe}" >"${ENVIRONMENT_RAW_PATH}"
+
+python3 - "${ENVIRONMENT_RAW_PATH}" "${ENVIRONMENT_PATH}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+raw_path, output_path = map(Path, sys.argv[1:])
+prefix = "MINITRAINBENCH_ENVIRONMENT_JSON="
+matches = [line[len(prefix):] for line in raw_path.read_text().splitlines()
+           if line.startswith(prefix)]
+if len(matches) != 1:
+    raise SystemExit(f"环境探针应输出一条标记 JSON，实际为 {len(matches)} 条")
+payload = json.loads(matches[0])
+output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+raw_path.unlink()
+PY
 
 python3 - "${ENVIRONMENT_PATH}" "${resolved_transformer_impl}" \
   "${EVIDENCE_MODE}" <<'PY'
