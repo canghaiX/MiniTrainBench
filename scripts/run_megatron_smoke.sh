@@ -101,7 +101,7 @@ megatron_args=(
   --normalization RMSNorm --no-persist-layer-norm --no-gradient-accumulation-fusion
   --swiglu --disable-bias-linear
   --untie-embeddings-and-output-weights --position-embedding-type rope --no-rope-fusion
-  --attention-dropout 0.0 --hidden-dropout 0.0
+  --attention-dropout 0.0 --hidden-dropout 0.0 --no-masked-softmax-fusion
   --transformer-impl "${TRANSFORMER_IMPL}" --distributed-backend nccl
   --eval-iters 0 --eval-interval 100000 --log-interval 1 --log-throughput
   --tensorboard-dir "/workspace/${OUT_DIR}/tensorboard/${trial_name}"
