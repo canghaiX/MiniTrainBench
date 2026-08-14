@@ -12,6 +12,19 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 8 卡性能定位方法见 [8 卡 Profiler Case Study](docs/profiler_case_study_8gpu.md)。
 多机与 NCCL 诊断见 [多机与 NCCL 诊断笔记](docs/multinode_nccl_diagnostics.md)。
 
+## 学习与面试入口
+
+- [学习路线与源码导读](docs/learning_guide.md)：按训练 step、strategy、checkpoint、
+  profiler、TP/MoE 的顺序阅读源码，并附七天学习计划。
+- [错误记录与诊断手册](docs/error_log.md)：记录本项目真实遇到的问题、根因、修复、验证和
+  面试表达，同时列出尚未验证、不能宣称的能力。
+- [项目复盘与面试指南](docs/interview_guide.md)：包含 90 秒项目介绍、架构重点、高频追问和
+  项目边界。
+
+建议先按学习指南跑 CPU/Gloo 最小路径，再阅读错误手册理解实验可信度，最后用面试指南
+整理表达。性能数字应以 `results/` 中带 provenance 的结果为准；Megatron 当前公开的是
+compatibility smoke，NGC repeat=3 正式性能矩阵尚未发布。
+
 ## 能力矩阵
 
 | 方向 | 状态 | 仓库证据 |

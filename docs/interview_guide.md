@@ -3,6 +3,10 @@
 本文档用于复盘 MiniTrainBench 从 benchmark 到最小训练 Runtime 的实现过程，并准备
 训练框架、训练 Runtime、分布式训练和性能工程相关面试。
 
+建议先阅读[学习路线与源码导读](learning_guide.md)，建立 data、state、collective、
+checkpoint 和 failure 的完整链路；再阅读[错误记录与诊断手册](error_log.md)，按“现象、
+诊断、根因、修复、验证、边界”复盘真实问题。本文负责把这些内容压缩成面试表达。
+
 ## 一分钟介绍
 
 MiniTrainBench 是一个 Docker 化的 PyTorch 分布式训练 benchmark 和最小训练 Runtime。
