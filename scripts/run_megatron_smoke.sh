@@ -113,7 +113,8 @@ fi
 command=(
   docker run --rm --gpus all --ipc=host --network=host
   -v "${PWD}:/workspace" -v "${MEGATRON_DIR}:/megatron"
-  -e PYTHONPATH=/megatron -w /megatron "${MEGATRON_IMAGE}" "${megatron_args[@]}"
+  -e PYTHONPATH=/megatron -e CUDA_DEVICE_MAX_CONNECTIONS=1
+  -w /megatron "${MEGATRON_IMAGE}" "${megatron_args[@]}"
 )
 printf -v public_command '%q ' "${command[@]}"
 public_command="${public_command//${MEGATRON_DIR}/<MEGATRON_DIR>}"
