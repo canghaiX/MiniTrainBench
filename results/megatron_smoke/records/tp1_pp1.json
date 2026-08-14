@@ -1,0 +1,171 @@
+{
+  "batch_config": {
+    "global_batch_size": 8,
+    "micro_batch_size": 1
+  },
+  "benchmark": "megatron",
+  "dp": 8,
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "megatron_core": "0.18.2",
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
+  "evidence_mode": "compatibility",
+  "expected_repeat_count": 1,
+  "failure_reason": null,
+  "megatron": {
+    "commit": "571370c829ca768fe37244f4e2e7f28d8accc4ab",
+    "core_version": "0.18.2",
+    "distributed_optimizer": true,
+    "environment_profile": "pytorch_2_10_official_fallback",
+    "ngc_base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "ref": "core_v0.18.2",
+    "sequence_parallel": false,
+    "transformer_impl": "local"
+  },
+  "model_config": {
+    "hidden_size": 1024,
+    "num_attention_heads": 16,
+    "num_layers": 8,
+    "sequence_length": 512,
+    "vocab_size": 32768
+  },
+  "name": "tp1_pp1",
+  "performance_invalid_reasons": [
+    "compatibility_smoke",
+    "concurrent_gpu_compute_processes",
+    "non_ngc_fallback_environment"
+  ],
+  "performance_valid": false,
+  "pp": 1,
+  "precision": "bf16",
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "913d6bc25478ecf21ba1df1cb50cdc8b999cc382",
+    "command": "docker run --rm --gpus all --ipc=host --network=host -v <REPO_DIR>:/workspace -v <MEGATRON_DIR>:/megatron -e PYTHONPATH=/megatron -e CUDA_DEVICE_MAX_CONNECTIONS=1 -w /megatron minitrainbench:megatron torchrun --standalone --nproc_per_node=8 /megatron/pretrain_gpt.py --mock-data --tokenizer-type NullTokenizer --vocab-size 32768 --num-layers 8 --hidden-size 1024 --ffn-hidden-size 4096 --num-attention-heads 16 --seq-length 512 --max-position-embeddings 512 --micro-batch-size 1 --global-batch-size 8 --train-iters 3 --lr-decay-iters 3 --lr 3e-4 --min-lr 3e-5 --lr-decay-style cosine --lr-warmup-iters 1 --weight-decay 0.1 --clip-grad 1.0 --adam-beta1 0.9 --adam-beta2 0.95 --bf16 --tensor-model-parallel-size 1 --pipeline-model-parallel-size 1 --use-distributed-optimizer --overlap-grad-reduce --overlap-param-gather --normalization RMSNorm --no-persist-layer-norm --no-gradient-accumulation-fusion --swiglu --disable-bias-linear --untie-embeddings-and-output-weights --position-embedding-type rope --no-rope-fusion --attention-dropout 0.0 --hidden-dropout 0.0 --no-masked-softmax-fusion --transformer-impl local --distributed-backend nccl --eval-iters 0 --eval-interval 100000 --log-interval 1 --log-throughput --tensorboard-dir /workspace/results/megatron_smoke/tensorboard/tp1_pp1_trial01 --log-timers-to-tensorboard --log-memory-to-tensorboard",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "913d6bc25478ecf21ba1df1cb50cdc8b999cc382",
+    "image_id": "sha256:8388100baf5c699f42fc9f899898c6773c9f65fb9ac05b87a0d610c360f3725e",
+    "image_ref": "minitrainbench:megatron",
+    "missing_fields": []
+  },
+  "repeat_count": 1,
+  "runtime": {
+    "micro_batches_per_iteration": 1,
+    "pipeline_bubble_proxy": 0.0,
+    "pipeline_bubble_proxy_source": "theoretical_fill_drain_approximation",
+    "pipeline_idle_observed": "not_determined_without_trace"
+  },
+  "status": "success",
+  "summary": {
+    "peak_device_memory_delta_mb": {
+      "max": 4789.0,
+      "mean": 4789.0,
+      "min": 4789.0,
+      "std": 0.0
+    },
+    "peak_device_memory_mb": {
+      "max": 5672.0,
+      "mean": 5672.0,
+      "min": 5672.0,
+      "std": 0.0
+    },
+    "step_time_ms": {
+      "max": 1354.55,
+      "mean": 1354.55,
+      "min": 1354.55,
+      "std": 0.0
+    },
+    "tokens_per_sec": {
+      "max": 3023.882470193053,
+      "mean": 3023.882470193053,
+      "min": 3023.882470193053,
+      "std": 0.0
+    }
+  },
+  "tp": 1,
+  "trial_protocol": "independent_process_restart",
+  "trials": [
+    {
+      "command": "docker run --rm --gpus all --ipc=host --network=host -v <REPO_DIR>:/workspace -v <MEGATRON_DIR>:/megatron -e PYTHONPATH=/megatron -e CUDA_DEVICE_MAX_CONNECTIONS=1 -w /megatron minitrainbench:megatron torchrun --standalone --nproc_per_node=8 /megatron/pretrain_gpt.py --mock-data --tokenizer-type NullTokenizer --vocab-size 32768 --num-layers 8 --hidden-size 1024 --ffn-hidden-size 4096 --num-attention-heads 16 --seq-length 512 --max-position-embeddings 512 --micro-batch-size 1 --global-batch-size 8 --train-iters 3 --lr-decay-iters 3 --lr 3e-4 --min-lr 3e-5 --lr-decay-style cosine --lr-warmup-iters 1 --weight-decay 0.1 --clip-grad 1.0 --adam-beta1 0.9 --adam-beta2 0.95 --bf16 --tensor-model-parallel-size 1 --pipeline-model-parallel-size 1 --use-distributed-optimizer --overlap-grad-reduce --overlap-param-gather --normalization RMSNorm --no-persist-layer-norm --no-gradient-accumulation-fusion --swiglu --disable-bias-linear --untie-embeddings-and-output-weights --position-embedding-type rope --no-rope-fusion --attention-dropout 0.0 --hidden-dropout 0.0 --no-masked-softmax-fusion --transformer-impl local --distributed-backend nccl --eval-iters 0 --eval-interval 100000 --log-interval 1 --log-throughput --tensorboard-dir /workspace/results/megatron_smoke/tensorboard/tp1_pp1_trial01 --log-timers-to-tensorboard --log-memory-to-tensorboard",
+      "failure_reason": null,
+      "log_sha256": "739ba1385544f1ded6c103e3d8b546845ac47cb4ca0d637133be6da75d11fc5e",
+      "metrics": {
+        "device_memory": [
+          {
+            "baseline_device_memory_mb": 747.0,
+            "device_index": 0,
+            "peak_device_memory_delta_mb": 4725.0,
+            "peak_device_memory_mb": 5472.0
+          },
+          {
+            "baseline_device_memory_mb": 747.0,
+            "device_index": 1,
+            "peak_device_memory_delta_mb": 4719.0,
+            "peak_device_memory_mb": 5466.0
+          },
+          {
+            "baseline_device_memory_mb": 943.0,
+            "device_index": 2,
+            "peak_device_memory_delta_mb": 4725.0,
+            "peak_device_memory_mb": 5668.0
+          },
+          {
+            "baseline_device_memory_mb": 747.0,
+            "device_index": 3,
+            "peak_device_memory_delta_mb": 4715.0,
+            "peak_device_memory_mb": 5462.0
+          },
+          {
+            "baseline_device_memory_mb": 943.0,
+            "device_index": 4,
+            "peak_device_memory_delta_mb": 4729.0,
+            "peak_device_memory_mb": 5672.0
+          },
+          {
+            "baseline_device_memory_mb": 747.0,
+            "device_index": 5,
+            "peak_device_memory_delta_mb": 4735.0,
+            "peak_device_memory_mb": 5482.0
+          },
+          {
+            "baseline_device_memory_mb": 747.0,
+            "device_index": 6,
+            "peak_device_memory_delta_mb": 4731.0,
+            "peak_device_memory_mb": 5478.0
+          },
+          {
+            "baseline_device_memory_mb": 747.0,
+            "device_index": 7,
+            "peak_device_memory_delta_mb": 4789.0,
+            "peak_device_memory_mb": 5536.0
+          }
+        ],
+        "memory_source": "nvidia_smi_device_used_memory",
+        "parameters": null,
+        "peak_device_memory_delta_mb": 4789.0,
+        "peak_device_memory_mb": 5672.0,
+        "step_sample_count": 2,
+        "step_time_ms": 1354.55,
+        "step_time_ms_summary": {
+          "max": 2657.4,
+          "mean": 1354.55,
+          "min": 51.7,
+          "std": 1842.508139737787
+        },
+        "tokens_per_sec": 3023.882470193053,
+        "tokens_per_sec_source": "derived_global_batch_seq_length_over_mean_step_time"
+      },
+      "status": "success",
+      "trial_index": 1
+    }
+  ],
+  "world_size": 8
+}

@@ -125,9 +125,10 @@ RNG 和数据迭代状态。
 
 ### MiniTrainBench 当前如何实现
 
-Checkpoint v2 使用 PyTorch DCP 保存 DDP/FSDP model/optimizer，保存 TrainState 和每 rank
-CPU/CUDA RNG，并采用临时目录、barrier、`READY`、`latest` 和 retention。`checkpoint verify`
-能比较模型、optimizer、TrainState 与 RNG digest，证明同配置恢复的一致性。
+Checkpoint v3 使用 PyTorch DCP 保存 DDP/FSDP model/optimizer/scheduler，保存 TrainState 和
+每 rank CPU/CUDA RNG，并采用临时目录、barrier、`READY`、`latest` 和 retention。
+`checkpoint verify` 能比较 model、optimizer、scheduler、TrainState 与 RNG digest，证明
+同配置恢复的一致性。
 
 ### 差距和边界
 
@@ -146,6 +147,23 @@ TP=2/4、TP=2+PP=2 和 PP=4。实验重点不是证明 Megatron 快，而是回�
 - 日志中哪些指标可以直接观测，哪些必须依赖 trace/TensorBoard，不能凭均值推断。
 
 源码不复制进仓库，结果必须记录 Megatron commit、容器、完整命令和失败原因。
+
+## 本轮 8 卡兼容性结果
+
+固定 `core_v0.18.2` commit 后，`TP/PP/DP=1/1/8`、`2/1/4`、`4/1/2`、`2/2/2`、
+`1/4/2` 五组 topology 均完成 forward/backward/optimizer smoke。这证明外部 runner 的
+parallel group、TP、PP 和 distributed optimizer 参数组合可执行，但不等于完成正式性能
+benchmark。
+
+本轮 NGC 大镜像未能在合理时间内拉取，且 8 张 GPU 上存在其他计算进程，因此使用锁定的
+官方 PyTorch fallback 做兼容性验证。fallback 缺少 Transformer Engine/APEX fused kernels，
+显式关闭 RoPE、persistent LayerNorm、weight-gradient 和 masked-softmax fusion；torch
+LayerNorm 不支持 sequence parallel，因此 TP 配置的 SP 状态记录为 false。报告将
+`performance_valid` 标为 false，并隐藏吞吐和显存值。
+
+PP=2 和 PP=4 分别记录 0.2 与约 0.429 的 fill-drain 理论 bubble proxy；没有 pipeline trace，
+所以不能声称观察到同等比例的 idle。正式结论仍要求 NGC、独占 GPU、repeat=3 和完整
+20-step 测量协议，当前结果只回答“能否按这些拓扑运行”。
 
 ## 上游阅读入口
 

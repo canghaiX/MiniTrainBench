@@ -1,10 +1,79 @@
 {
   "benchmark": "megatron_matrix",
-  "environment": null,
-  "image": "nvcr.io/nvidia/pytorch:26.01-py3",
-  "megatron_commit": null,
-  "megatron_ref": "core_v0.18.2",
-  "records": [],
-  "status": "not_run",
-  "status_reason": "当前节点无法从 GitHub 获取固定 ref，且未提供可校验的外部 MEGATRON_DIR；未生成性能数据。"
+  "config_count": 5,
+  "environment": {
+    "cuda": "13.0",
+    "cudnn": "91501",
+    "driver": "580.173.02",
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "gpu_count": 8,
+    "megatron_core": "0.18.2",
+    "nccl": "2.28.9",
+    "python": "3.12.3",
+    "torch": "2.10.0+cu130"
+  },
+  "execution_complete": true,
+  "expected_config_count": 5,
+  "expected_repeat_count": 1,
+  "megatron": {
+    "commit": "571370c829ca768fe37244f4e2e7f28d8accc4ab",
+    "core_version": "0.18.2",
+    "distributed_optimizer": true,
+    "environment_profile": "pytorch_2_10_official_fallback",
+    "ngc_base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "ref": "core_v0.18.2",
+    "sequence_parallel": false,
+    "transformer_impl": "local"
+  },
+  "performance_invalid_reasons": [
+    "compatibility_smoke",
+    "concurrent_gpu_compute_processes",
+    "non_ngc_fallback_environment"
+  ],
+  "performance_valid": false,
+  "provenance": {
+    "base_image": "pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b",
+    "build_revision": "913d6bc25478ecf21ba1df1cb50cdc8b999cc382",
+    "command": "docker run --rm --gpus all --ipc=host --network=host -v <REPO_DIR>:/workspace -v <MEGATRON_DIR>:/megatron -e PYTHONPATH=/megatron -e CUDA_DEVICE_MAX_CONNECTIONS=1 -w /megatron minitrainbench:megatron torchrun --standalone --nproc_per_node=8 /megatron/pretrain_gpt.py --mock-data --tokenizer-type NullTokenizer --vocab-size 32768 --num-layers 8 --hidden-size 1024 --ffn-hidden-size 4096 --num-attention-heads 16 --seq-length 512 --max-position-embeddings 512 --micro-batch-size 1 --global-batch-size 8 --train-iters 3 --lr-decay-iters 3 --lr 3e-4 --min-lr 3e-5 --lr-decay-style cosine --lr-warmup-iters 1 --weight-decay 0.1 --clip-grad 1.0 --adam-beta1 0.9 --adam-beta2 0.95 --bf16 --tensor-model-parallel-size 1 --pipeline-model-parallel-size 1 --use-distributed-optimizer --overlap-grad-reduce --overlap-param-gather --normalization RMSNorm --no-persist-layer-norm --no-gradient-accumulation-fusion --swiglu --disable-bias-linear --untie-embeddings-and-output-weights --position-embedding-type rope --no-rope-fusion --attention-dropout 0.0 --hidden-dropout 0.0 --no-masked-softmax-fusion --transformer-impl local --distributed-backend nccl --eval-iters 0 --eval-interval 100000 --log-interval 1 --log-throughput --tensorboard-dir /workspace/results/megatron_smoke/tensorboard/tp1_pp1_trial01 --log-timers-to-tensorboard --log-memory-to-tensorboard",
+    "complete": true,
+    "git_dirty": false,
+    "git_revision": "913d6bc25478ecf21ba1df1cb50cdc8b999cc382",
+    "image_id": "sha256:8388100baf5c699f42fc9f899898c6773c9f65fb9ac05b87a0d610c360f3725e",
+    "image_ref": "minitrainbench:megatron",
+    "missing_fields": []
+  },
+  "records": [
+    {
+      "name": "tp1_pp1",
+      "path": "records/tp1_pp1.json",
+      "repeat_count": 1,
+      "status": "success"
+    },
+    {
+      "name": "tp2_pp1",
+      "path": "records/tp2_pp1.json",
+      "repeat_count": 1,
+      "status": "success"
+    },
+    {
+      "name": "tp4_pp1",
+      "path": "records/tp4_pp1.json",
+      "repeat_count": 1,
+      "status": "success"
+    },
+    {
+      "name": "tp2_pp2",
+      "path": "records/tp2_pp2.json",
+      "repeat_count": 1,
+      "status": "success"
+    },
+    {
+      "name": "tp1_pp4",
+      "path": "records/tp1_pp4.json",
+      "repeat_count": 1,
+      "status": "success"
+    }
+  ],
+  "status": "compatibility_smoke",
+  "successful_config_count": 5
 }

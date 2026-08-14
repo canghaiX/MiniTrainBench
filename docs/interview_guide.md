@@ -53,19 +53,24 @@ profiler、collective、MoE all-to-all 和 toy TP 都有可运行证据。Multi-
 
 Megatron-LM 也采用同样边界：项目没有低质量复刻整个框架，而是自己实现可验证的
 toy TP/SP 与 Runtime 契约，再固定上游版本阅读关键链路并准备外部 8 卡 TP/PP/DP
-runner。当前官方环境实测为 `not_run`，面试时不能把 runner 说成已完成 benchmark。
+runner。`core_v0.18.2` 的五组 8 卡 TP/PP/DP topology 已完成 compatibility smoke，
+但运行在官方 PyTorch fallback 且 GPU 非独占，因此不能说成 NGC 性能 benchmark。
 
 90 秒表述：
 
 > 我没有复刻完整 Megatron，而是把项目分成两层：MiniTrainBench 内部实现可验证的
 > DDP/FSDP、checkpoint、Profiler、MoE all-to-all 和 toy TP/SP；外部读取 Megatron 的
 > parallel groups、pipeline schedule、distributed optimizer 和 checkpoint 关键链路，
-> 并准备了固定版本的 8 卡 TP/PP/DP runner。当前官方环境还没有完成实测，所以我只把
-> case study 和可复现脚本作为证据，不展示性能数字。这样既说明机制理解，也如实区分
-> toy Runtime 与生产训练框架的边界。
+> 并用固定版本跑通五组 8 卡 TP/PP/DP compatibility smoke。由于 NGC repeat=3 和独占卡
+> 条件还没满足，我不展示这批 smoke 的性能数字。这样既证明真实框架启动和并行拓扑，
+> 也如实区分兼容性证据、正式性能证据和 toy Runtime 的边界。
 
 面试时可以这样说：我把仓库边界写清楚，是为了让 reviewer 快速知道哪些能力已经实现并
 benchmark，哪些属于后续扩展，而不是把不完整的多机或 RLHF demo 混进主项目。
+
+快速投递材料优先使用 [英文项目一页摘要](project_one_pager.md)。如果面试官追问“实验中
+真正踩过什么坑”，沿 [锁定环境 GPU 重跑复盘](postmortem_locked_gpu_rerun.md) 讲环境锁定、
+adapter schema、Megatron fused kernel capability 和性能证据门禁，不要虚构 NCCL timeout。
 
 ## 真实遇到的问题与解决方式
 
@@ -340,11 +345,14 @@ CUDA 计时要同步；多 rank 用 max step time；至少 repeat 多次报告�
 2. 再补通信层证据，把 all-reduce、all-gather、reduce-scatter、all-to-all 以及 ZeRO 的差异拆开看。
 3. 然后加上故障恢复和正确性检查，让项目从 benchmark 变成能解释训练系统边界的最小框架。
 4. 最后用 doctor、多机 torchrun 模板、toy TP/MoE demo 和 CI smoke，把工程化和可复现性补齐。
+5. 固定 Megatron `core_v0.18.2`，在外部源码上跑通五组 8 卡 TP/PP/DP compatibility smoke，
+   同时把非 NGC、非独占环境的性能字段标成无效。
 
 面试追问时可以主动强调边界：
 
 - 多机和真实 MoE 训练没有做成完整生产系统，但已经有诊断和通信证据链。
-- TP/PP/SP 只做 toy correctness 和 notes，没有把整个 Megatron runtime 重写一遍。
+- 仓库内 TP/SP 只做 toy correctness；真实 PP 通过外部 Megatron compatibility smoke 验证，
+  但 NGC repeat=3 性能仍待补，没有把整个 Megatron runtime 重写一遍。
 - RLHF/GRPO、推理和编译器方向不在这次项目目标里。
 
 这样的讲法比较像训练框架岗位，而不是单纯的 benchmark 简介。
@@ -363,6 +371,10 @@ CUDA 计时要同步；多 rank 用 max step time；至少 repeat 多次报告�
 - 能解释 ZeRO-2、ZeRO-3 与 FSDP 的显存/通信对比，以及为什么 DeepSpeed adapter 独立。
 - 能解释 MoE token dispatch 为什么是 all-to-all，以及 equal/uneven split 分别看什么。
 - 能解释 toy Tensor Parallel 如何验证 Column/Row Parallel Linear 的 forward/backward。
+- 能解释 Megatron 为什么要求 `CUDA_DEVICE_MAX_CONNECTIONS=1`，以及 local torch LayerNorm
+  为什么不能冒充已启用 sequence parallel。
+- 能区分 `execution_complete`、`provenance.complete` 和 `performance_valid`，说明五组
+  Megatron smoke 成功不等于已有正式性能结论。
 - 能诚实说明当前限制：小模型、synthetic data、单节点、toy TP 而非完整 Megatron、
   无 PP/SP Runtime、无跨 world size resharding；仓库已有短跑基线，严谨性能结论需要跑
   `run_a100_stability_matrix.sh`。

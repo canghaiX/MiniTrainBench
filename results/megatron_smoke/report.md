@@ -1,26 +1,19 @@
 # Megatron-LM 8 卡 Smoke / TP-PP-DP 矩阵
 
-## 当前状态
+Megatron 源码由用户通过 `MEGATRON_DIR` 提供；本目录只保存命令、版本、日志解析结果和失败原因。
 
-`not_run`。目标版本固定为 `core_v0.18.2`，目标镜像为
-`nvcr.io/nvidia/pytorch:26.01-py3`。当前节点无法从 GitHub 获取该固定 ref，工作区也没有
-可校验的外部官方 Megatron-LM 源码，因此没有启动训练，也没有生成 tokens/sec、step time
-或显存数字。
+**警告：本报告包含兼容性 smoke，性能指标不可横向比较。**
+原因：compatibility_smoke, concurrent_gpu_compute_processes, non_ngc_fallback_environment
 
-这不是 benchmark 失败记录，更不是性能结论。`manifest.json` 的 `records` 保持为空，
-README 能力矩阵也不将 Megatron 标为 `benchmarked`。
+| 配置 | 环境 | TP | PP | DP | Repeat | 状态 | 性能可比 | Tokens/sec | Step (ms) | 设备峰值显存 (MB) | 理论 bubble proxy | 失败原因 |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | --- |
+| tp1_pp1 | pytorch_2_10_official_fallback | 1 | 1 | 8 | 1 | success | no | - | - | - | 0.0 | - |
+| tp2_pp1 | pytorch_2_10_official_fallback | 2 | 1 | 4 | 1 | success | no | - | - | - | 0.0 | - |
+| tp4_pp1 | pytorch_2_10_official_fallback | 4 | 1 | 2 | 1 | success | no | - | - | - | 0.0 | - |
+| tp2_pp2 | pytorch_2_10_official_fallback | 2 | 2 | 2 | 1 | success | no | - | - | - | 0.2 | - |
+| tp1_pp4 | pytorch_2_10_official_fallback | 1 | 4 | 2 | 1 | success | no | - | - | - | 0.42857142857142855 | - |
 
-## 复现
-
-准备好外部官方源码并将 HEAD 切到固定 ref 后运行：
-
-```bash
-MEGATRON_DIR=/path/to/Megatron-LM \
-MEGATRON_REF=core_v0.18.2 \
-MEGATRON_IMAGE=nvcr.io/nvidia/pytorch:26.01-py3 \
-  scripts/run_megatron_tp_pp_matrix.sh
-```
-
-脚本会先校验 ref/commit 和容器内 PyTorch、CUDA、NCCL、Megatron Core 版本，再依次运行
-TP/PP=`1/1`、`2/1`、`4/1`、`2/2`、`1/4`。环境探针、训练或日志解析失败都会写入
-结构化 record；只有成功且 metadata 完整的记录才能作为实测证据。
+`Tokens/sec` 由 global batch、sequence length 与测量 step 均值推导；设备显存来自
+独占 GPU 条件下的 `nvidia-smi` 设备级采样，不等同于 PyTorch allocator 指标。
+Pipeline bubble 仅给出 fill-drain 理论 proxy；没有 trace 时不声称观察到 idle。
+兼容性 smoke 的原始指标保留在 JSON 供审计，但 Markdown 不展示为性能结论。

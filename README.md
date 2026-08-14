@@ -3,6 +3,8 @@
 MiniTrainBench 是一个小型、可复现的分布式 GPT-like 训练 benchmark，
 用于对比 PyTorch DDP 和 FSDP。项目使用合成 token 数据，因此不依赖数据集下载。
 
+面向 reviewer 的英文一页摘要见 [Project One-Pager](docs/project_one_pager.md)，
+锁定环境重跑的真实问题见 [GPU 重跑故障复盘](docs/postmortem_locked_gpu_rerun.md)。
 面试复盘和训练 Infra 高频问题见 [项目复盘与面试指南](docs/interview_guide.md)。
 MoE/expert parallel 通信笔记见 [MoE 训练笔记](docs/moe_training_notes.md)，
 Megatron-style TP/PP/SP 笔记见 [并行训练笔记](docs/parallelism_notes.md)。
@@ -22,7 +24,7 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 | LR scheduler / gradient health | implemented | constant/cosine、全局 gradient norm、梯度裁剪、全 rank fail-fast |
 | MoE | all-to-all microbenchmark + routing demo | equal/uneven split、MoE token dispatch 设计笔记 |
 | Tensor Parallel | toy correctness check + notes | Column/Row Parallel Linear、TP MLP、Sequence Parallel |
-| Megatron-LM | case study + external runner | 固定 ref 的外部源码 smoke/matrix；官方环境实测尚未产出 |
+| Megatron-LM | external compatibility smoke | `core_v0.18.2` 五组 8 卡 TP/PP/DP 已跑通；NGC repeat=3 性能待补 |
 | Memory pressure | 8 卡 benchmarked | 23.2M/168.5M/731.1M/2.60B 的 DDP/FSDP/ZeRO 成功与 OOM 证据 |
 | Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
 | RLHF/GRPO | not implemented | 当前聚焦 pretraining runtime / distributed infra |
@@ -52,8 +54,8 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 - 提供 toy tensor parallel correctness check，验证 Column/Row Parallel Linear
   与单卡 reference 的 forward/backward 一致性，并补了 toy MLP 与 sequence parallel demo。
 - 提供 toy MoE routing demo，记录 top-1 dispatch、capacity、overflow 和 load imbalance。
-- 提供显存压力矩阵和固定版本的 Megatron-LM 外部运行脚本，为后续真实框架结果与
-  toy TP/SP 的对照保留可复现入口。
+- 提供显存压力矩阵和固定版本的 Megatron-LM 外部运行脚本；五组 8 卡 TP/PP/DP
+  topology 已完成兼容性 smoke，并将非独占 fallback 的性能指标明确标为无效。
 - 通过 Docker 复现 GPU 实验，并通过非 GPU CI 做 smoke test。
 - 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
@@ -183,10 +185,13 @@ deterministic synthetic iterator，报告中主指标渲染为 `mean ± std`。
 - `results/profile/profile_summary.md`：DDP/FSDP PyTorch Profiler 摘要；原始 trace 被 `.gitignore` 排除。
 - `results/memory_pressure/report.md`：多模型规模 DDP/FSDP/ZeRO 的成功、OOM 和失败证据。
 - `results/profile_8gpu/profile_summary.md`：8 卡 DDP/FSDP profiler 跨 rank 摘要。
+- `results/megatron_smoke/report.md`：Megatron-LM 五组 8 卡 TP/PP/DP 兼容性 smoke。
 
-`results/megatron_smoke/report.md` 当前以 `not_run` 明确记录外部官方源码不可用，未填写
-任何性能数字；因此能力矩阵不将 Megatron 标为 `benchmarked`。runner 只有在外部官方
-源码、固定 ref 与容器环境校验通过后才会写入真实矩阵记录。
+Megatron 结果固定上游 ref/commit，五组拓扑都成功完成 forward/backward/optimizer。
+本轮使用官方 PyTorch fallback，且 GPU 上存在其他计算任务，因此 manifest 标记
+`performance_valid=false`，Markdown 不展示吞吐和显存。能力矩阵只声明 compatibility
+smoke；只有 NGC、独占 GPU、repeat=3 和完整 metadata 同时满足后才升级为 performance
+benchmarked。
 
 运行真实 rank crash / 手工恢复 smoke：
 
@@ -206,9 +211,9 @@ scripts/generate_evidence_manifest.sh
 ```
 
 `results/evidence_manifest.json` 保存每份 JSON 的 SHA256、benchmark 状态、启动命令、
-Git revision、image ID 和 base image。本轮锁定环境重跑索引了 83 份正式 JSON，全部
-`provenance.complete=true`，统一对应源码 revision `048ca3e` 和同一官方 base digest。
-旧 JSON 仍可读取，但不会混入正式 evidence manifest。
+Git revision、image ID 和 base image。不同 revision 或 environment profile 会逐条保留，
+不能把它们当成同一批性能实验。旧 JSON 仍可读取，但缺少 provenance 时不会被升级为
+正式证据。
 
 运行显存压力矩阵：
 
@@ -237,15 +242,29 @@ trace 时间线可确认时下结论。
 运行外部 Megatron-LM smoke / TP-PP-DP 矩阵：
 
 ```bash
-MEGATRON_DIR=/path/to/Megatron-LM \
-MEGATRON_REF=core_v0.18.2 \
-MEGATRON_IMAGE=nvcr.io/nvidia/pytorch:26.01-py3 \
+docker login nvcr.io
+scripts/build_megatron_image.sh
+MEGATRON_DIR=/path/to/Megatron-LM MEGATRON_REF=core_v0.18.2 \
   scripts/run_megatron_tp_pp_matrix.sh
 ```
 
-脚本要求外部仓库 HEAD 与固定 ref 一致，但不会切换或修改外部仓库。默认运行
-TP/PP=`1/1`、`2/1`、`4/1`、`2/2`、`1/4`，使用 mock data，并保存完整命令、commit、
-日志解析结果和失败原因。MiniTrainBench 不包含 Megatron 源码，也不宣称实现完整 PP。
+默认派生镜像锁定 NGC PyTorch 26.01 digest 和 `megatron-core[training]==0.18.2`。脚本要求
+外部仓库 HEAD 与固定 ref 一致，但不会切换或修改外部仓库。矩阵运行 TP/PP=`1/1`、
+`2/1`、`4/1`、`2/2`、`1/4`，使用 mock data，并保存完整命令、commit、日志 SHA256、
+设备显存采样和失败原因。正式模式检测到已有 GPU 计算进程会拒绝启动。
+
+NGC 暂不可用时，可显式使用锁定的官方 PyTorch fallback 验证兼容性：
+
+```bash
+BASE_IMAGE=pytorch/pytorch:2.10.0-cuda13.0-cudnn9-runtime@sha256:1f57418aedd9a4d0d3a59646619e1d4f82cacc33817247cead4f749e1f452d4b \
+  scripts/build_megatron_image.sh
+MEGATRON_DIR=/path/to/Megatron-LM ALLOW_PYTORCH_FALLBACK=1 \
+EVIDENCE_MODE=compatibility scripts/run_megatron_tp_pp_matrix.sh
+```
+
+fallback 使用 local unfused kernel，并在 TP>1 时关闭不受 torch LayerNorm 支持的 sequence
+parallel。该模式只证明启动和并行拓扑兼容，不产生可横向比较的性能结论。MiniTrainBench
+不包含 Megatron 源码，也不宣称实现完整 PP。
 
 按 GPU 数运行短版 DDP benchmark：
 
@@ -582,7 +601,7 @@ step-time straggler。collective event duration 可能与计算重叠，因此�
 | 23.2M | 133.6K tok/s, 568 MB | 91.0K, 123 MB | 114.6K, 2057 MB | 25.2K, 1118 MB |
 | 168.5M | 56.7K, 3892 MB | 48.8K, 501 MB | 62.9K, 2828 MB | 10.3K, 1732 MB |
 | 731.1M | 18.8K, 16904 MB | 23.6K, 1844 MB | 31.6K, 5472 MB | 4.5K, 3974 MB |
-| 2.60B | OOM | 16.6K, 6371 MB | 18.6K, 12582 MB | 4.3K, 10153 MB |
+| 2.60B | OOM | 14.7K, 6371 MB | 19.1K, 12582 MB | 5.1K, 10153 MB |
 
 这组结果给出的边界比小模型 baseline 更明确：DDP 在 small/medium 仍有较低框架开销，
 但显存随参数规模快速上升；到 731.1M 时 FSDP 已同时取得更低显存和更高吞吐，到
@@ -597,8 +616,11 @@ gather 和 engine 开销影响，不能把“分片更彻底”直接等价为�
 MoE all-to-all 和 toy TP/SP；[Megatron 工程 Case Study](docs/megatron_case_study.md)
 对照真实框架的 parallel groups、TP layers、pipeline schedule、distributed optimizer 和
 distributed checkpoint。外部 runner 固定 `core_v0.18.2`，要求用户提供官方源码并记录
-commit、容器、软件版本和完整命令。当前未在匹配的官方 Megatron 环境产出实测，因此
-README 不展示 TP/PP 性能数字，也不把 Megatron 标为 benchmarked。
+commit、容器、软件版本和完整命令。8 卡 `1/1/8`、`2/1/4`、`4/1/2`、`2/2/2`、
+`1/4/2` 五组拓扑已经完成 compatibility smoke；由于运行环境不是 NGC 且 GPU 非独占，
+README 不展示 TP/PP 性能数字，也不把 Megatron 标为 performance benchmarked。详见
+[Megatron smoke 报告](results/megatron_smoke/report.md) 和
+[锁定环境重跑复盘](docs/postmortem_locked_gpu_rerun.md)。
 
 没有实现完整 Megatron、多机或 RLHF 是主动控制范围：本项目优先证明 pretraining runtime
 的通信、显存、恢复和性能诊断能力。生产级 PP schedule、跨节点 fabric 验证和训练后阶段
