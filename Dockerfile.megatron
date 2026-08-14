@@ -8,19 +8,11 @@ ARG SOURCE_URL=https://github.com/canghaiX/MiniTrainBench
 ARG MEGATRON_CORE_VERSION=0.18.2
 ARG PYBIND11_VERSION=2.13.6
 
-LABEL org.opencontainers.image.source="${SOURCE_URL}" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.base.name="${BASE_IMAGE}" \
-      io.minitrainbench.megatron-core.version="${MEGATRON_CORE_VERSION}"
-
 ENV PIP_CONSTRAINT= \
     PIP_NO_CACHE_DIR=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    MINITRAINBENCH_BASE_IMAGE="${BASE_IMAGE}" \
-    MINITRAINBENCH_BUILD_REVISION="${VCS_REF}"
+    PYTHONUNBUFFERED=1
 
 RUN --mount=type=secret,id=https_proxy,required=false \
     if [ -f /run/secrets/https_proxy ]; then \
@@ -44,6 +36,15 @@ RUN --mount=type=secret,id=https_proxy,required=false \
       export http_proxy="${HTTPS_PROXY}"; \
     fi; \
     python3 -m pip install "pybind11==${PYBIND11_VERSION}"
+
+LABEL org.opencontainers.image.source="${SOURCE_URL}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      io.minitrainbench.megatron-core.version="${MEGATRON_CORE_VERSION}"
+
+ENV MINITRAINBENCH_BASE_IMAGE="${BASE_IMAGE}" \
+    MINITRAINBENCH_BUILD_REVISION="${VCS_REF}"
 
 WORKDIR /megatron
 CMD ["python3", "-c", "import megatron.core; print('Megatron Core ready')"]

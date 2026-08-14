@@ -589,6 +589,10 @@ def build_evidence_manifest(paths: Iterable[str]) -> dict[str, Any]:
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 "benchmark": payload.get("benchmark"),
                 "status": payload.get("status", "success"),
+                "performance_valid": payload.get("performance_valid"),
+                "performance_invalid_reasons": payload.get(
+                    "performance_invalid_reasons", []
+                ),
                 "world_size": payload.get("world_size"),
                 "strategy": payload.get("strategy"),
                 "command": provenance.get("command"),

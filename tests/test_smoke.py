@@ -301,6 +301,8 @@ def test_evidence_manifest_records_hash_and_provenance(tmp_path) -> None:
     payload = {
         "benchmark": "training",
         "status": "success",
+        "performance_valid": False,
+        "performance_invalid_reasons": ["compatibility_smoke"],
         "world_size": 2,
         "strategy": "ddp",
         "provenance": {
@@ -313,6 +315,10 @@ def test_evidence_manifest_records_hash_and_provenance(tmp_path) -> None:
     manifest = build_evidence_manifest([str(path)])
     assert manifest["complete"] is True
     assert manifest["entries"][0]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert manifest["entries"][0]["performance_valid"] is False
+    assert manifest["entries"][0]["performance_invalid_reasons"] == [
+        "compatibility_smoke"
+    ]
 
 
 def test_deepspeed_config_builder_zero_stages() -> None:
