@@ -111,7 +111,7 @@ if (( TP > 1 )); then
 fi
 command=(
   docker run --rm --gpus all --ipc=host --network=host
-  -v "${PWD}:/workspace" -v "${MEGATRON_DIR}:/megatron:ro"
+  -v "${PWD}:/workspace" -v "${MEGATRON_DIR}:/megatron"
   -e PYTHONPATH=/megatron -w /megatron "${MEGATRON_IMAGE}" "${megatron_args[@]}"
 )
 printf -v public_command '%q ' "${command[@]}"

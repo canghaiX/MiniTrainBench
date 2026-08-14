@@ -32,3 +32,4 @@ results/rank_crash/crash.log
 results/rank_crash/unexpected_crash_output.json
 results/megatron_smoke/logs/
 results/megatron_smoke/tensorboard/
+results/megatron_preflight/

@@ -50,7 +50,7 @@ def classify_failure(returncode: int, output: str) -> tuple[str, str]:
     text = output.lower()
     if any(pattern in text for pattern in OOM_PATTERNS):
         return "oom", "CUDA 内存不足"
-    if "timed out" in text or "timeout" in text or "watchdog" in text:
+    if "timed out" in text or "watchdog timeout" in text:
         return "failed", "通信或进程超时"
     if returncode == 0:
         return "success", ""
@@ -205,8 +205,8 @@ def build_megatron_trial_record(
     status, reason = classify_failure(returncode, log_text)
     is_timeout = (
         returncode == 124
-        or "timeout" in log_text.lower()
-        or "watchdog" in log_text.lower()
+        or "timed out" in log_text.lower()
+        or "watchdog timeout" in log_text.lower()
     )
     if is_timeout:
         status = "timeout"

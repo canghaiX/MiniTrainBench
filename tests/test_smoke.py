@@ -494,6 +494,7 @@ def test_evidence_failure_and_log_parsing(tmp_path) -> None:
         "failed",
         "通信或进程超时",
     )
+    assert classify_failure(1, "distributed timeout: 10 minutes")[0] == "failed"
     assert classify_failure(0, "ok") == ("success", "")
 
     log = """

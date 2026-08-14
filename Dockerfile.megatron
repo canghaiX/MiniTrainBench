@@ -28,6 +28,10 @@ RUN --mount=type=secret,id=https_proxy,required=false \
       export https_proxy="${HTTPS_PROXY}"; \
       export http_proxy="${HTTPS_PROXY}"; \
     fi; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential; \
+    rm -rf /var/lib/apt/lists/*; \
     python3 -m pip install \
       "megatron-core[training]==${MEGATRON_CORE_VERSION}" tensorboard
 
