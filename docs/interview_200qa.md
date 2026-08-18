@@ -1,12 +1,184 @@
 # MiniTrainBench 深度面试问答
 
-这份文档用于面试前复盘。问题不追求数量堆满，而是模拟真实面试里“围绕一个点继续追问”的节奏。
+这份文档用于面试前复盘，包含基础热身题和项目深挖题。深挖题不追求数量堆满，而是模拟真实面试里“围绕一个点继续追问”的节奏。
 
 回答时建议遵守三条原则：
 
 - 先讲项目目标，再讲实现细节。
 - 先讲证据，再讲结论。
 - 主动说明边界，不把 compatibility smoke 说成正式 benchmark。
+
+## 0. 基础热身题
+
+这一节更像面经里的开场题，重点是把基础概念说清楚，不要一上来就陷入实现细节。
+
+### B1. 面试官：什么是反向传播？
+
+答：反向传播就是根据 loss 对模型参数求梯度的过程。前向传播先算出预测和 loss，反向传播再沿着计算图把梯度传回每一层，最后 optimizer 根据梯度更新参数。
+
+在 PyTorch 里，一般是 `loss.backward()` 触发 autograd 自动完成反向传播。
+
+### B2. 面试官：什么是 optimizer？
+
+答：optimizer 是参数更新器。它读取每个参数的梯度，然后按照 AdamW、SGD 这类算法更新参数。
+
+在本项目里默认使用 AdamW，所以 checkpoint 不能只保存模型参数，还要保存 optimizer state。因为 AdamW 里有一阶矩、二阶矩等状态，它们会影响后续训练轨迹。
+
+### B3. 面试官：optimizer 和 scheduler 有什么区别？
+
+答：optimizer 决定“怎么用梯度更新参数”，scheduler 决定“每一步用多大学习率”。optimizer 关心参数更新规则，scheduler 关心学习率随 step 如何变化。
+
+所以精确 resume 时，两者都要恢复。只恢复 optimizer，不恢复 scheduler，后续学习率可能会错。
+
+### B4. 面试官：什么是 learning rate？
+
+答：learning rate 是每次参数更新的步长。太大可能训练不稳定，太小可能收敛很慢。
+
+在训练系统里，learning rate 通常不是固定写死的，而是由 scheduler 按 step 推进。本项目支持 constant 和 cosine 两种 scheduler。
+
+### B5. 面试官：什么是 batch size？
+
+答：batch size 是一次训练 step 里每个 rank 或整个训练任务处理多少样本。分布式训练里要区分 local batch size 和 global batch size。
+
+本项目里的 global batch size 等于 `batch_size_per_rank * world_size * grad_accum_steps`。
+
+### B6. 面试官：step、iteration、epoch 有什么区别？
+
+答：step 或 iteration 通常指一次 optimizer update。epoch 指完整遍历一遍数据集。
+
+这个项目使用 synthetic token，不依赖真实数据集，所以更关注 global step，而不是 epoch。因为 benchmark 和 checkpoint 都围绕 step 组织。
+
+### B7. 面试官：什么是 gradient accumulation？
+
+答：gradient accumulation 是先跑多个 micro-batch，把梯度累积起来，再做一次 optimizer step。它常用于显存不够放大 batch 的情况。
+
+关键点是每个 micro-batch 的 loss 要除以 accumulation steps，否则梯度会被放大。
+
+### B8. 面试官：什么是 micro-batch？
+
+答：micro-batch 是 gradient accumulation 里的一个小批次。多个 micro-batch 累积后，形成一次等效的大 batch 更新。
+
+在分布式训练里，micro-batch 会影响显存、通信频率和 pipeline 调度。
+
+### B9. 面试官：什么是 dropout？
+
+答：dropout 是训练时随机丢弃部分激活，减少过拟合的一种方法。它只在训练阶段启用，推理阶段通常关闭。
+
+dropout 依赖随机数，所以本项目做精确 resume 时必须保存每个 rank 的 RNG state。
+
+### B10. 面试官：什么是 LayerNorm？
+
+答：LayerNorm 是对每个样本内部的 hidden 维度做归一化。Transformer 里常用 LayerNorm，因为它不依赖 batch 统计，更适合变长序列和分布式训练。
+
+和 BatchNorm 不同，LayerNorm 不需要跨 batch 维护 running mean 和 running variance。
+
+### B11. 面试官：FP32、FP16、BF16 有什么区别？
+
+答：FP32 精度高但显存和计算开销更大。FP16 更省显存、速度快，但数值范围小，训练时经常需要 GradScaler。BF16 数值范围接近 FP32，显存接近 FP16，所以大模型训练里很常见。
+
+本项目主线使用 BF16/FP32，没有实现 FP16 GradScaler。如果未来支持 FP16，scaler state 也应该进入 checkpoint。
+
+### B12. 面试官：什么是梯度裁剪？
+
+答：梯度裁剪是当梯度范数超过阈值时，把梯度缩放到阈值以内。它常用于防止梯度爆炸。
+
+本项目会记录 grad norm 和 clipped steps，这样可以知道训练是否稳定，以及裁剪是否真的发生。
+
+### B13. 面试官：什么是 checkpoint？
+
+答：checkpoint 是训练状态快照，用来在中断后恢复训练。最基础的 checkpoint 可能只保存模型参数，但严肃训练里还要保存 optimizer、scheduler、step、RNG 等状态。
+
+本项目强调的是精确 checkpoint，不只是能继续跑，还要能验证恢复后和连续训练一致。
+
+### B14. 面试官：什么是 resume？
+
+答：resume 是从 checkpoint 恢复训练。它不只是 load model，还要恢复训练进度、优化器状态、学习率状态和随机状态。
+
+如果这些状态不完整，训练可能能继续，但不能保证和没中断时一样。
+
+### B15. 面试官：为什么训练要固定 seed？
+
+答：固定 seed 是为了让随机初始化、数据生成和随机算子尽量可复现。没有固定 seed，重复实验的差异很难解释。
+
+本项目里 synthetic data 和模型初始化都依赖 seed，这也是 repeat 和 checkpoint verify 能成立的基础。
+
+### B16. 面试官：什么是 distributed training？
+
+答：distributed training 是用多个进程、多张 GPU 或多台机器一起训练模型。常见目标是提升吞吐、放下更大模型，或者处理更大的 batch。
+
+这个项目主要做单节点多 GPU 分布式训练，重点比较 DDP、FSDP 和 ZeRO。
+
+### B17. 面试官：什么是 rank 和 world size？
+
+答：rank 是分布式训练中每个进程的编号，world size 是总进程数。比如 8 卡单机通常有 8 个 rank，world size 是 8。
+
+很多状态都要按 rank 区分，比如每个 rank 的 RNG state、local shard 和通信计时。
+
+### B18. 面试官：什么是 DDP？
+
+答：DDP 是 PyTorch 的 DistributedDataParallel。每个 rank 持有完整模型，处理不同数据，反向传播时通过 all-reduce 同步梯度。
+
+它的优点是简单、吞吐通常好；缺点是每张卡都要放完整参数、梯度和 optimizer state。
+
+### B19. 面试官：什么是 FSDP？
+
+答：FSDP 是 Fully Sharded Data Parallel。它会把参数、梯度和 optimizer state 分片到不同 rank，降低单卡显存。
+
+代价是 forward/backward 中会引入 all-gather、reduce-scatter 等通信，所以小模型上不一定比 DDP 快。
+
+### B20. 面试官：什么是 all-reduce？
+
+答：all-reduce 是一种 collective 通信。每个 rank 贡献一个 tensor，通信后每个 rank 都得到聚合结果。
+
+DDP 梯度同步主要依赖 all-reduce。
+
+### B21. 面试官：什么是 all-gather 和 reduce-scatter？
+
+答：all-gather 是每个 rank 拿到所有 rank 的数据。reduce-scatter 是先聚合所有 rank 的数据，再把结果切分回每个 rank。
+
+FSDP 经常用 all-gather 获取完整参数，用 reduce-scatter 聚合并分片梯度。
+
+### B22. 面试官：什么是 all-to-all？
+
+答：all-to-all 是每个 rank 都给其他 rank 发送不同的数据，同时也从其他 rank 接收数据。
+
+MoE expert parallel 里，token 会按 expert 重新分发，所以 all-to-all 是核心通信模式。
+
+### B23. 面试官：吞吐和延迟有什么区别？
+
+答：吞吐关注单位时间处理多少 token 或样本，延迟关注一次操作花多长时间。训练 benchmark 常看 tokens/sec，通信 benchmark 常同时看 latency 和 bandwidth。
+
+小 tensor 更容易受延迟影响，大 tensor 更容易体现带宽上限。
+
+### B24. 面试官：什么是 profiler？
+
+答：profiler 是性能分析工具，用来记录训练过程中时间花在哪里。它能帮助判断瓶颈在计算、通信、optimizer、CPU 调度还是数据准备。
+
+本项目把 profiler 和正式 benchmark 分开，避免 profiling 开销污染吞吐结果。
+
+### B25. 面试官：什么是 straggler？
+
+答：straggler 是分布式训练中比其他 rank 慢的进程。同步训练必须等最慢 rank，所以一个 straggler 就可能拖慢整个 step。
+
+本项目 profiler 报告里会看 rank min、p50、max 和 straggler ratio。
+
+### B26. 面试官：什么是 OOM？
+
+答：OOM 是 out of memory，表示显存或内存不够。大模型训练里 OOM 很常见，通常需要减 batch、开 activation checkpointing、使用 FSDP/ZeRO，或者调整模型规模。
+
+本项目的 memory pressure 矩阵就专门记录了哪些配置成功、哪些配置 OOM。
+
+### B27. 面试官：什么是 overfitting？
+
+答：overfitting 是模型在训练集上表现很好，但泛化到新数据上表现差。常见缓解方式包括更多数据、正则化、dropout、early stopping 等。
+
+不过本项目不以模型效果为主，不评价泛化能力，主要关注训练系统行为。
+
+### B28. 面试官：为什么要做 warmup？
+
+答：warmup 可以排除刚启动时的冷态影响，比如 CUDA context 初始化、kernel 缓存、内存分配和通信初始化。
+
+本项目 benchmark 会把 warmup steps 和 measured steps 分开，正式统计只看 measured steps。
 
 ## 一、项目定位和整体设计
 
