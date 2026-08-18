@@ -1906,3 +1906,447 @@ for ckpt in ready[:-keep_last]:
 比如日志解析题，我会先定义输入是一行行日志，输出是按 step/rank 聚合的结构；数据结构用 dict；主路径逐行 parse；边界讲乱序、缺字段、NaN；测试讲正常、异常和多 rank。这样即使代码没完全写完，面试官也能看到工程思路。
 
 如果完全卡住，我会把问题降级成最小版本先跑通，再说明如何扩展。不要沉默，也不要把不确定的实现硬说成对。
+
+## 十六、MoE / Megatron / 大模型并行专项面经
+
+这一节专门补 MoE、Megatron-style training 和大模型混合并行。它不是纯模型结构背诵，而是面向训练 Infra：通信、显存、rank 拓扑、checkpoint、optimizer、profile 和故障边界。MiniTrainBench 已经有 toy MoE routing、all-to-all benchmark、toy TP/SP correctness 和 Megatron compatibility smoke；完整 MoE layer、完整 Megatron runtime、生产级 sharded checkpoint 和正式 Megatron performance benchmark 仍然是明确边界。
+
+### 16.1 MoE 深挖
+
+### Q241. 面试官：MoE layer 的完整前向路径你怎么讲？
+
+答：我会按 router、dispatch、expert compute、combine 四步讲。每个 token 先经过 router 得到 expert 分数，再选 top-k expert；然后 token 会按目标 expert 所在 rank 重新打包，通过 all-to-all dispatch 到对应 rank；每个 rank 对本地 expert batch 做 MLP 计算；最后 expert output 再 all-to-all 回原 token owner，并按 router weight combine 回原顺序。
+
+这个路径难在它既有模型语义，又有系统语义。router 决定负载，dispatch 决定通信，expert compute 决定 kernel 效率，combine 决定恢复 token 顺序。MiniTrainBench 只做了 toy top-1 routing、capacity/overflow 统计和 all-to-all 通信语义，不是完整 MoE 训练层。
+
+### Q242. 面试官：top-1 routing 和 top-2 routing 在系统上有什么差别？
+
+答：top-1 每个 token 只发给一个 expert，通信和计算相对简单；top-2 每个 token 会发给两个 expert，再按权重合并，通常训练信号更丰富，但 dispatch token 数、expert compute 和 combine 成本都会上升。
+
+系统上 top-2 会放大 all-to-all 压力，也会让 capacity、overflow 和 load balance 更敏感。面试里我不会只说 top-2 效果可能更好，而是会补一句：它让 runtime 要处理更多 token 副本、更多 buffer 和更复杂的 backward 路径。
+
+### Q243. 面试官：capacity factor 为什么是 MoE 系统题，而不只是算法题？
+
+答：capacity factor 决定每个 expert 在一个 batch 中最多接收多少 token。它看起来是 router 超参，但系统上直接影响显存峰值、expert compute 时间、buffer 大小和 step 抖动。
+
+capacity 太小，overflow token 变多，可能损伤训练质量；capacity 太大，热门 expert 会拿到更多 token，某些 rank 变成 straggler。MiniTrainBench 的 toy route 会统计 capacity、overflow 和 expert load，能证明我理解这层语义，但没有验证完整 MoE 收敛。
+
+### Q244. 面试官：overflow token 应该怎么处理？
+
+答：常见策略包括丢弃、走 residual 路径、fallback 到备用 expert，或者在 capacity 更大时接收。每种策略都有 tradeoff：丢弃简单但可能损伤质量；fallback 更复杂；提高 capacity 会增加显存和计算峰值。
+
+训练 Infra 面试里，我会先问目标是稳定性还是质量。如果是稳定跑超大规模训练，capacity 和 overflow 策略要让显存峰值可控；如果更关注效果，就要评估 overflow 对 loss 和下游指标的影响。MiniTrainBench 只展示 overflow 统计，不宣称有真实质量结论。
+
+### Q245. 面试官：load balancing loss 解决什么问题？
+
+答：它鼓励 router 不要把 token 都分给少数 expert，让 expert 负载更均匀。系统上它的作用是减少 straggler，让 all-to-all split 更均衡，也让每个 expert 的 batch size 更稳定。
+
+但它不是越大越好。负载均衡项太强，可能压制 router 的表达能力；太弱，系统会被热门 expert 拖慢。面试里我会把它讲成质量和系统效率之间的桥，而不是只背“让 expert 均衡”。
+
+### Q246. 面试官：MoE token packing 为什么需要 prefix sum？
+
+答：router 选完 expert 后，每个 token 的目标 rank 和 expert 都不一样。为了调用 all-to-all，通常要先统计每个 destination rank 要收多少 token，再用 prefix sum 计算每个目标段在连续 buffer 中的写入位置，最后把 token pack 到连续 buffer。
+
+这一步很关键，因为 all-to-all 更适合按 split 发送连续 buffer。实现错了会出现 token 顺序错、shape 错、rank 间 split 对不上，最后可能表现成结果错或 collective hang。MiniTrainBench 的 toy routing 只是展示这个语义，没有实现高性能 token permutation kernel。
+
+### Q247. 面试官：all-to-all dispatch 和 combine 为什么要成对出现？
+
+答：dispatch 是把 token 从原 owner rank 发到 expert owner rank，combine 是把 expert output 发回原 token owner，并恢复到原 token 顺序。MoE 不是把 token 发出去就结束，因为 Transformer 后续层仍需要按原 batch/sequence 位置继续计算。
+
+backward 也要沿着这条路径反向传播：expert output 的梯度要回到 expert，router weight 和 token hidden state 的梯度也要正确聚合。所以 all-to-all 不只是 forward 通信，它会影响完整训练图。
+
+### Q248. 面试官：MoE backward 路径难在哪里？
+
+答：难点是梯度要沿 dispatch/combine 的反路径回去。expert MLP 的参数梯度在 expert owner rank 上产生；token hidden state 的梯度要回到原 token owner；router 权重的梯度还依赖 combine 时的 expert output。
+
+系统上还要保证 backward 的 split、token permutation 和 forward 对齐。只要 forward pack 顺序或 metadata 记录不完整，backward 就可能对错 token。MiniTrainBench 当前没有完整 MoE backward，所以面试时只能讲原理和边界。
+
+### Q249. 面试官：grouped GEMM 在 MoE 里解决什么？
+
+答：每个 expert 接收到的 token 数可能不同，如果逐 expert 单独跑小 GEMM，kernel launch 多、矩阵小、GPU 利用率差。grouped GEMM 的思路是把多个不同形状或同类 expert 计算组织到更高效的 kernel 调度中，提升吞吐。
+
+但 grouped GEMM 不是只改一个 kernel。前面 token packing、expert batch metadata、capacity 和 padding 都会影响它的效率。MiniTrainBench 没有实现 grouped GEMM，所以不能把 MoE 通信 demo 说成完整性能优化。
+
+### Q250. 面试官：expert placement 会影响 MoE 性能吗？
+
+答：会。expert 放在哪些 rank 或节点上，会影响 token dispatch 的跨卡、跨节点通信路径。热门 expert 如果集中在某些慢链路节点上，就容易产生通信热点和 straggler。
+
+训练平台里 expert placement 需要考虑拓扑、负载均衡、故障隔离和扩缩容。MiniTrainBench 的 all-to-all equal/uneven split 只能模拟通信形态，不能覆盖真实 placement 策略。
+
+### Q251. 面试官：MoE profile 应该重点看哪些指标？
+
+答：我会看 router load distribution、overflow rate、每个 expert 的 token 数、dispatch all-to-all 时间、combine all-to-all 时间、expert compute 时间、rank max/p50、buffer size 和端到端 step time。
+
+只看 all-to-all 平均带宽不够，因为 MoE 的瓶颈往往来自不均衡。一个 rank 收到特别多 token，就会拖住同步 step。MiniTrainBench 的 uneven all-to-all 和 profiler rank spread 可以作为面试证据，但不能替代完整 MoE layer profile。
+
+### Q252. 面试官：如果被问“你 MoE 没做完整，为什么还讲 MoE”，怎么答？
+
+答：我会直接承认没有实现完整 MoE layer、grouped GEMM 或真实 MoE backward。然后说明我做的是 MoE 训练 Infra 最核心的一段通信证据：router 如何造成 token dispatch，expert parallel 为什么依赖 all-to-all，equal/uneven split 为什么能暴露负载不均。
+
+这个回答的重点是边界清楚。完整 MoE 训练当然还需要 expert compute、aux loss、backward、kernel 和收敛验证；但我已经把 MoE 与 DDP/FSDP/ZeRO 不同的通信本质讲清楚了。
+
+### 16.2 Megatron-style 并行深挖
+
+### Q253. 面试官：Megatron 里的 process group 为什么复杂？
+
+答：因为一个 rank 可能同时属于 TP group、PP group、DP group、EP group，甚至 CP group。不同 group 负责不同通信语义：TP 做层内聚合，PP 做相邻 stage P2P，DP 做副本间同步或 optimizer shard，EP 做 expert dispatch。
+
+复杂点不只是建几个 group，而是 rank mapping 要全局一致。所有 rank 必须用相同顺序创建 group，否则某些 rank 在等一个不存在的通信伙伴，就会启动 hang。MiniTrainBench 当前只有默认 world group，所以不能表达完整 Megatron 拓扑。
+
+### Q254. 面试官：`world_size = TP * PP * DP` 这个公式够用吗？
+
+答：基础 dense 模型里常用这个公式，但真实 Megatron-style 训练还可能有 CP、EP、expert data parallel、virtual pipeline 等维度。引入 MoE 后，普通 DP group 和 expert parallel group 可能不是同一个概念。
+
+面试里我会先用简单公式讲清楚，再补边界：公式只是资源分解入口，不代表 group mapping 已经正确。真正实现要有 rank generator、维度顺序和每类 group 的生命周期管理。
+
+### Q255. 面试官：为什么 group 初始化顺序不一致会 hang？
+
+答：collective 和 process group 创建本身都要求相关 rank 参与。如果 rank 0 先创建 TP group，rank 1 先创建 PP group，就可能两边都在等不同的伙伴，最后表现为启动阶段 hang。
+
+排查时我会先看所有 rank 的拓扑配置、group 创建顺序、rank mapping 和日志。MiniTrainBench 有多机/NCCL 诊断思路，但没有完整 group manager，所以这个问题属于 Megatron 读码和岗位知识储备。
+
+### Q256. 面试官：Column Parallel 和 Row Parallel 分别放在哪些层？
+
+答：Column Parallel 按输出维切权重，常用于 attention 的 QKV projection 和 MLP 的 up/gate projection。Row Parallel 按输入维切权重，常用于 attention output projection 和 MLP down projection，对 partial output 做 reduce。
+
+这样设计的好处是中间大的 hidden 或 intermediate activation 可以保持分片，减少不必要 all-gather。MiniTrainBench 的 toy TP MLP 验证了 column 后接 row 的 forward/backward correctness，但没有实现完整 Transformer block。
+
+### Q257. 面试官：vocab parallel 和 vocab-parallel cross entropy 解决什么？
+
+答：大模型的 vocab 很大，如果每个 rank 都保存完整 embedding 或 logits，显存和通信压力很高。vocab parallel 把 vocab 维切到不同 TP rank 上，LM head 和 embedding 都可以按 vocab shard 处理。
+
+cross entropy 也要配套并行化，否则需要 all-gather 完整 logits。真实实现会做分布式 max、sum exp 和目标 token 所在 shard 的 loss 计算。MiniTrainBench 没做 vocab parallel，所以面试里只能作为 Megatron 读码知识讲。
+
+### Q258. 面试官：Sequence Parallel 和 Context Parallel 有什么区别？
+
+答：Sequence Parallel 通常和 TP 搭配，把部分 activation 沿 sequence 维切分，减少每个 TP rank 的激活显存，常见于 LayerNorm、Dropout 等路径。Context Parallel 更偏长上下文训练，把 attention 的 context 或序列维跨 rank 切分，目标是处理更长 sequence。
+
+两者都和长序列显存相关，但通信模式和实现范围不同。MiniTrainBench 有 toy sequence parallel correctness，没有 context parallel，所以不能把两者都说成项目实现。
+
+### Q259. 面试官：Pipeline Parallel 的 1F1B schedule 怎么讲？
+
+答：1F1B 是 pipeline parallel 中常见的调度方式，经过 warmup 填充 pipeline 后，每个 stage 尽量交替做一个 forward 和一个 backward，最后 cooldown 排空剩余 micro-batch。它相比先全部 forward 再全部 backward，可以降低 activation 驻留时间。
+
+难点是 stage 间 P2P、activation 保存、loss stage、backward 依赖和 micro-batch 调度都要正确。MiniTrainBench 没有 PP schedule，所以我会明确说这是 Megatron 读码和外部 smoke 的知识。
+
+### Q260. 面试官：virtual pipeline parallelism 解决什么？
+
+答：virtual pipeline 会把一个物理 pipeline stage 再切成多个 virtual chunk，让流水线更细，减少 bubble 或改善 stage balance。它能提高利用率，但会增加调度复杂度、通信次数和 activation 管理难度。
+
+面试里我会把它和 bubble 联系起来：stage 越多、micro-batch 越少，bubble 越明显；virtual PP 是降低 bubble 的一种工程手段，不是免费加速。MiniTrainBench 没实现 virtual PP。
+
+### Q261. 面试官：micro-batch 数和 pipeline bubble 有什么关系？
+
+答：micro-batch 数越多，pipeline 填充和排空的固定成本越容易被摊薄，bubble 占比越低；micro-batch 数太少，很多 stage 会在 warmup/cooldown 阶段闲着。
+
+但 micro-batch 不是越多越好，因为它会影响 activation、通信次数、optimizer step 频率和 global batch 语义。Megatron compatibility smoke 里记录了 PP bubble proxy，但没有 pipeline trace，所以不能声称观察到了完整 idle 行为。
+
+### Q262. 面试官：stage balance 为什么重要？
+
+答：PP 里每个 stage 持有不同层，如果某个 stage 计算特别慢，整个 pipeline 都会被它拖住。即使 bubble 理论上很小，stage 不均衡也会导致吞吐差。
+
+stage balance 要考虑层计算量、embedding/loss 所在 stage、attention/MLP 比例、激活大小和通信路径。MiniTrainBench 没做 layer partition，因此只能在面试里讲设计思路，不能说项目验证了 stage balance。
+
+### Q263. 面试官：Megatron distributed optimizer 和 ZeRO/FSDP 怎么对比？
+
+答：Megatron distributed optimizer 通常在 data-parallel ranks 间切分 optimizer state 和 gradient buffer，配合 contiguous parameter/gradient buffer、reduce-scatter 和参数 all-gather。ZeRO/FSDP 也做状态分片，但工程边界和 runtime 管理方式不同。
+
+对比时不要只背名字，要说清楚参数、梯度、optimizer state 哪些 replicated、哪些 sharded，参数 gather 发生在什么时候，checkpoint 如何保存。MiniTrainBench 有 FSDP 和 ZeRO adapter 证据，但没有 Megatron distributed optimizer 的内部实现。
+
+### Q264. 面试官：contiguous gradient buffer 有什么价值？
+
+答：它把很多小参数的梯度组织进连续 buffer，减少大量小 collective 和内存碎片，也更方便做 bucket、reduce-scatter 和通信 overlap。大模型里参数很多，如果每个 tensor 单独通信，固定延迟会很高。
+
+代价是实现复杂：参数到 buffer 的映射、梯度写入、optimizer shard、checkpoint 和 dtype 转换都要维护。MiniTrainBench 当前没有自定义 contiguous buffer，这是 Megatron/DeepSpeed 这类框架更完整的地方。
+
+### Q265. 面试官：overlap-grad-reduce 和 overlap-param-gather 分别是什么？
+
+答：overlap-grad-reduce 是 backward 过程中某些梯度 ready 后，就尽早 reduce 或 reduce-scatter，试图和后续 backward compute 重叠。overlap-param-gather 是 forward 前提前 gather 后面层需要的参数，试图隐藏参数通信。
+
+难点是 overlap 只有 trace 能证明，不能只看 op 总耗时。MiniTrainBench 的 profiler 章节一直强调 `key_averages()` 不能证明 overlap，这个原则同样适用于 Megatron optimizer 和 FSDP prefetch。
+
+### Q266. 面试官：Megatron distributed checkpoint 比普通 checkpoint 难在哪？
+
+答：普通 checkpoint 可以假设同配置、同 world size 恢复；Megatron distributed checkpoint 要记录 sharded state、shard placement、TP/PP/DP/EP 拓扑、rank mapping，甚至支持目标拓扑变化时的 resharding。
+
+MiniTrainBench 的 checkpoint 强项是 READY/latest、RNG、fingerprint 和 exact verify，但它要求同 strategy、同 world size 和同 rank mapping。面试里要清楚说：项目验证了恢复语义，不支持 Megatron 级别的跨拓扑 reshard。
+
+### Q267. 面试官：为什么 gradient accumulation 不等于 Pipeline Parallel？
+
+答：gradient accumulation 是同一个模型副本上分多次 micro-batch 累积梯度，再做一次 optimizer step。Pipeline Parallel 是把模型层切到不同 stage，让 micro-batch 在 stage 间流动。
+
+两者都涉及 micro-batch，但系统语义完全不同。GA 主要影响通信频率和显存，PP 还涉及 P2P、bubble、stage balance 和 activation 传递。MiniTrainBench 做了 GA，不做 PP，这是面试里必须讲清楚的边界。
+
+### Q268. 面试官：Megatron compatibility smoke 和完整 benchmark 的差距在哪里？
+
+答：compatibility smoke 证明某个拓扑能完成 forward/backward/optimizer，不代表性能数字可信。完整 benchmark 还需要固定 NGC/TE 环境、独占 GPU、足够 warmup 和 measured steps、repeat、provenance、trace 或指标，以及不被 fallback kernel 影响。
+
+MiniTrainBench 的 Megatron 外部实验现在是 core 版本固定、五组 8 卡拓扑跑通，但 fallback 环境且 GPU 非独占，performance_valid 是 false。这个边界越早说清楚越可信。
+
+### 16.3 相关训练系统高频补充
+
+### Q269. 面试官：FlashAttention 在训练 Infra 里解决什么？
+
+答：FlashAttention 主要优化 attention 的内存访问和中间激活物化，减少 HBM 读写，提高 attention 性能，尤其在长序列场景明显。它不是改变 attention 数学结果，而是改变计算组织方式。
+
+系统上要关注硬件支持、dtype、sequence length、mask、dropout、kernel 版本和数值一致性。MiniTrainBench 没有集成 FlashAttention，所以面试里我会把它作为 kernel/系统知识储备，不写成项目能力。
+
+### Q270. 面试官：Transformer Engine 和 fused kernel 为什么重要？
+
+答：大模型训练里很多性能来自 fused kernel 和专用库，比如 fused LayerNorm、fused attention、FP8/BF16 路径和高效 GEMM。Transformer Engine 这类栈能把多个小 op 融合，减少 kernel launch 和内存读写。
+
+这也是为什么 Megatron fallback 环境不能和 NGC/TE 正式环境横向比较。MiniTrainBench 在文档里把 fallback 性能标为 invalid，就是因为 kernel profile 是实验变量。
+
+### Q271. 面试官：`CUDA_DEVICE_MAX_CONNECTIONS=1` 为什么会被 Megatron 提到？
+
+答：这个环境变量会影响 CUDA work queues 和通信计算调度。Megatron 某些 overlap 或 sequence parallel 场景会要求特定设置，让 kernel 和 NCCL 的执行顺序更可控。
+
+我不会把它背成万能优化参数。正确回答是：它和具体 Megatron 版本、并行策略、kernel 栈有关，需要看官方要求和 trace 验证。MiniTrainBench 没有基于这个变量做正式性能结论。
+
+### Q272. 面试官：long-context training 会放大哪些 Infra 问题？
+
+答：长上下文会放大 attention 计算、activation 显存、KV/attention 中间状态、通信和 checkpoint 时间。即使参数量不变，sequence length 增大也可能让 activation 成为主要显存瓶颈。
+
+因此会引入 FlashAttention、activation recompute、sequence/context parallel 和更细的 profiler 分析。MiniTrainBench 默认 sequence length 较小，不能用它直接证明长上下文训练性能，但可以用它解释方法论。
+
+### Q273. 面试官：Context Parallel 和 Sequence Parallel 什么时候值得考虑？
+
+答：当 sequence length 很长，单卡或单个 TP group 上的 activation/attention 内存压力过大时，才会考虑这些更复杂的序列维切分。它们的目标是把长序列压力分摊到多个 rank。
+
+代价是额外通信、attention mask 处理、位置编码、dropout/RNG 和 checkpoint 更复杂。面试里我会把它们作为长上下文训练的扩展知识，不说 MiniTrainBench 已经覆盖。
+
+### Q274. 面试官：Megatron、DeepSpeed、FSDP 工程栈怎么选？
+
+答：我会先看团队已有生态、模型规模、并行需求和 checkpoint 语义。如果主要是 PyTorch 原生、希望较低接入成本，FSDP 是自然选择；如果团队已有 DeepSpeed 配置和 ZeRO 经验，可以用 ZeRO；如果需要成熟的 TP/PP/EP/CP 混合并行，Megatron-style 栈更完整。
+
+选择不是谁高级谁赢，而是看 runtime 生命周期、状态管理、debug 成本、性能目标和团队维护能力。MiniTrainBench 把 FSDP 放在主 Trainer、ZeRO 做 adapter、Megatron 做外部 smoke，正是这个工程取舍的体现。
+
+### Q275. 面试官：大模型并行 profile 时为什么不能只看 tokens/sec？
+
+答：tokens/sec 是结果指标，不能告诉你瓶颈在哪。大模型混合并行里，瓶颈可能来自 TP 层内 collective、PP bubble、EP all-to-all、DP reduce-scatter、optimizer buffer、data input 或某个 fused kernel。
+
+所以我会拆 step breakdown、rank spread、collective 类型、消息大小、kernel 时间线和内存峰值。MiniTrainBench 的 profiler 和 comm benchmark 是小规模证据，真实 Megatron 还需要更完整 trace。
+
+### Q276. 面试官：为什么大模型训练里“环境锁定”特别重要？
+
+答：因为 PyTorch、CUDA、NCCL、cuDNN、Transformer Engine、APEX、driver、容器 digest 和 kernel fusion flag 都可能影响性能甚至能否启动。换一个镜像，可能从 fused kernel 变成 unfused fallback，性能数字就不可比。
+
+MiniTrainBench 的 Megatron smoke 把 fallback 环境和非独占 GPU 标成 performance_valid=false，就是为了避免把 compatibility 结果包装成正式性能。训练 Infra 里，环境也是实验协议的一部分。
+
+### 16.4 高压追问模板
+
+### Q277. 面试官：你没实现完整 Megatron，为什么还敢讲 Megatron？
+
+答：我会说我不是把 Megatron 当成项目已实现能力，而是把它作为训练 Infra 的读码和对照材料。我的项目内部做了 DDP/FSDP/ZeRO、checkpoint、profiler、MoE all-to-all、toy TP/SP；外部固定 Megatron 版本跑了 compatibility smoke，并写了工程 case study。
+
+所以我能讲清楚 Megatron-style 并行的核心问题：process group、TP/PP、distributed optimizer、sharded checkpoint 和性能证据边界。但我不会说自己复刻了 Megatron runtime。
+
+### Q278. 面试官：MoE 没有完整训练，你怎么证明你理解 MoE？
+
+答：我会从系统路径证明，而不是硬说做了完整层。MoE 的训练 Infra 核心是 router 造成 token 重新分布，expert parallel 依赖 all-to-all，capacity 和 overflow 决定负载与稳定性，uneven split 会制造 straggler。
+
+MiniTrainBench 做了 toy routing 和 all-to-all equal/uneven benchmark，能把这条路径讲清楚。完整 MoE 还需要 grouped GEMM、backward、aux loss、kernel 和收敛验证，这是我明确没做的边界。
+
+### Q279. 面试官：compatibility smoke 和 performance benchmark 最大区别是什么？
+
+答：compatibility smoke 回答“能不能启动、能不能完成一小段 forward/backward/optimizer”；performance benchmark 回答“在严格实验协议下到底多快、多省显存、是否稳定”。前者看功能路径，后者看可信数字。
+
+正式性能需要独占硬件、固定镜像、repeat、warmup、measured steps、provenance 和污染检测。MiniTrainBench 文档里反复区分 smoke、performance_valid 和 public report，就是为了避免混淆这两个层级。
+
+### Q280. 面试官：如果下一步补 MoE/Megatron，你会先补什么？
+
+答：如果只选一个方向，我会先补 topology/process group manager 和更完整的 Megatron-style evidence，因为它是 TP/PP/EP/CP 组合的地基。没有稳定的 group mapping，后面模型切分、checkpoint 和 profiler 都容易碎片化。
+
+MoE 方向我会先补 token packing metadata、dispatch/combine correctness 和简单 expert MLP，再考虑 grouped GEMM 和 backward。无论补哪条线，我都会保持当前项目原则：先做最小正确闭环，再做性能结论，最后才说生产能力。
+
+## 十七、FlagCX / Transformer Engine / 异构通信与低精度训练专项面经
+
+这一节补两个更贴近大模型训练 Infra 的库级话题：FlagCX 代表异构芯片通信和 x-CCL 抽象，Transformer Engine 代表低精度训练、fused kernel 和 Megatron 常见加速栈。MiniTrainBench 当前没有集成 FlagCX，也没有集成 TE/FP8；它们在这里作为岗位知识储备和未来扩展方向。能绑定到本项目的证据，主要是 NCCL collective benchmark、MoE all-to-all、Megatron fallback 标记 invalid、环境锁定、provenance 和 profiler。
+
+参考链接：[FlagCX](https://github.com/flagos-ai/FlagCX)、[FlagCX Tests](https://docs.flagos.io/projects/FlagCX/en/latest/testing.html)、[Transformer Engine Docs](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/)、[Transformer Engine PyTorch API](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/api/pytorch.html)。
+
+### 17.1 FlagCX / 异构通信库面经
+
+### Q281. 面试官：FlagCX 是什么，为什么训练 Infra 会关心它？
+
+答：我会把 FlagCX 理解成面向多芯片、多厂商场景的通信库或通信抽象层。传统训练里，如果都是 NVIDIA GPU，NCCL 是最常见选择；但真实集群可能有不同芯片、不同厂商 CCL、不同互联路径，训练框架希望上层 collective 语义尽量统一。
+
+训练 Infra 关心它，是因为通信库直接影响 all-reduce、all-gather、reduce-scatter、all-to-all 这些核心路径。MiniTrainBench 当前只实测 NCCL/Gloo，不支持 FlagCX；所以面试里我会说这是异构通信方向的知识储备，不说成项目能力。
+
+### Q282. 面试官：FlagCX 和 NCCL、HCCL、RCCL、CNCL 这些 x-CCL 是什么关系？
+
+答：我的理解是，NCCL、HCCL、RCCL、CNCL 这类库更偏具体芯片或厂商生态下的 collective 实现；FlagCX 这类跨芯片通信库的价值，是在这些 native x-CCL 之上或旁边，提供更统一的通信接口和跨芯片数据交换能力。
+
+回答时要谨慎，不要说“FlagCX 替代所有 CCL”。更准确是：同构场景优先用厂商最强 native backend；异构或跨生态场景需要一个能协调不同 backend、P2P、IPC、RDMA 和 fallback 的抽象层。
+
+### Q283. 面试官：为什么异构芯片训练需要统一通信抽象？
+
+答：因为上层训练框架关心的是 collective 语义，比如 all-reduce 梯度、all-gather 参数、all-to-all token dispatch，而不是每次都手写不同芯片的通信细节。如果没有统一抽象，同一个训练策略在不同硬件上要写多套路径，debug 和 benchmark 都会变得非常碎。
+
+但统一抽象也有代价。它可能隐藏 backend 差异，让性能问题更难定位。所以好的通信抽象必须把 backend、拓扑、消息大小、fallback 状态和性能指标暴露出来，不能只给一个“成功完成”的布尔值。
+
+### Q284. 面试官：FlagCX 里 host API 和 device API 可以怎么理解？
+
+答：host API 可以理解成由 CPU/host 侧发起的高层 collective 调用，接近训练框架常见的通信入口；device API 更偏设备侧或 kernel 级通信能力，适合做更底层的 P2P、IPC、RDMA 或细粒度性能测试。
+
+面试里不需要硬背具体函数名，重点是讲清楚两层关注点不同：host API 看上层 collective 是否易接入、易 benchmark；device API 看更低层的数据路径、同步和性能上限。FlagCX 文档里也把 performance test 分成 host API 和 device API 两类。
+
+### Q285. 面试官：device-buffer IPC 和 device-buffer RDMA 解决什么问题？
+
+答：它们解决的是设备内存之间高效数据交换的问题。IPC 更偏同节点或近距离设备间共享/访问 device buffer，RDMA 更偏跨节点直接访问远端内存，目标都是减少不必要的 host 拷贝和中间转发。
+
+训练系统里，这会影响跨芯片 P2P 和 collective 的效率。比如 all-to-all 或 all-gather 如果频繁经过 host staging，延迟和带宽都会受影响。但具体收益必须通过 benchmark 验证，不能只听名字就认为一定更快。
+
+### Q286. 面试官：FlagCX 和 PyTorch distributed 的边界在哪里？
+
+答：PyTorch distributed 提供训练框架层的 process group、collective API 和 DDP/FSDP 等能力；FlagCX 这类通信库更像底层或中间层 backend，负责具体数据如何跨设备、跨节点、跨芯片移动。
+
+如果要接入 MiniTrainBench，我会优先把它放进 communication benchmark 或 process group backend 层，而不是直接改 Trainer 语义。先证明 all-reduce/all-gather/reduce-scatter/all-to-all 能跑、指标能记录，再讨论训练 runtime 接入。
+
+### Q287. 面试官：怎么 benchmark FlagCX 这种通信库？
+
+答：我会沿用通信 benchmark 的基本方法：固定 world size、设备、拓扑、dtype、message size 和 warmup/measured iterations，分别测 all-reduce、all-gather、reduce-scatter、all-to-all 的 latency、bandwidth、p50/p95、rank spread 和失败率。
+
+异构场景还要额外记录 backend 选择、芯片组合、链路类型、是否跨节点、是否 fallback、是否经过 host staging。MiniTrainBench 现在已有 NCCL collective benchmark 和 MoE all-to-all，可以作为扩展 FlagCX benchmark 的模板。
+
+### Q288. 面试官：NCCL 和 FlagCX benchmark 怎么公平比较？
+
+答：首先要明确比较目标。如果是同构 NVIDIA 集群，NCCL 是强 baseline；FlagCX 如果走 NCCL backend 或封装层，就不能把封装开销和原生 NCCL 混着解释。如果是异构集群，NCCL 本身可能不能覆盖所有设备组合，那比较目标就变成“是否能统一跑起来，以及代价是多少”。
+
+公平比较需要固定 message size、rank 数、拓扑、dtype、warmup、repeat 和独占环境，并记录 backend 路径。不能只拿一个 tokens/sec 说谁更快，必须说明它跑的是同构、异构、native backend 还是 fallback。
+
+### Q289. 面试官：FlagCX/CCL 通信慢了怎么排查？
+
+答：我会先看 backend 是否符合预期，再看 rank/world size、拓扑、网卡、驱动/runtime、环境变量和 message size。然后用最小 collective benchmark 复现，区分是某个 op 慢、某种 size 慢，还是只有训练 step 慢。
+
+如果是异构场景，还要看是否发生 fallback、是否经过 host 拷贝、某类芯片是否成为 straggler、不同 backend 的同步语义是否一致。排查顺序和 NCCL 类似，但异构通信更需要把实际路径暴露出来。
+
+### Q290. 面试官：FlagCX/CCL 出现 hang，最可能是什么原因？
+
+答：常见原因仍然是 collective 参与者不一致：rank 数不一致、某些 rank 没进入同一个 collective、op type 或 tensor shape 不一致、group mapping 错、某个 backend 初始化失败但上层没感知。异构场景还可能有某个设备 backend 卡住，其他 rank 在等待。
+
+我的处理方式是先加 timeout 和分阶段日志，记录每个 rank 即将进入的 op、shape、group 和 backend。MiniTrainBench 的 collective sequence mismatch coding 题和 NCCL 诊断思路可以迁移到 FlagCX，但项目没有真实 FlagCX hang 证据。
+
+### Q291. 面试官：FlagCX 对 MoE all-to-all 有什么意义？
+
+答：MoE expert parallel 最核心的通信就是 token dispatch/combine 的 all-to-all。如果训练集群是异构芯片，MoE 的 all-to-all 会更加难，因为 token 可能跨不同 backend、不同带宽和不同延迟路径流动。
+
+FlagCX 这类库的价值，是给异构 all-to-all 提供更统一的数据交换能力。但 MoE 性能最终还取决于 router load balance、token packing、expert placement、grouped GEMM 和 straggler。MiniTrainBench 只验证了 NCCL all-to-all equal/uneven split，不代表 FlagCX MoE 性能。
+
+### Q292. 面试官：如果把 FlagCX 接入 MiniTrainBench，你会先做什么？
+
+答：我会先做最小通信 backend adapter，而不是一上来改训练主循环。第一步扩展 `comm` benchmark，让它能选择 NCCL/Gloo/FlagCX 类 backend，输出相同 schema；第二步记录 backend、设备、拓扑、版本、fallback 状态和环境变量；第三步只发布 collective 结果，不急着宣称训练加速。
+
+等 communication evidence 稳定后，再考虑 DDP/FSDP 或 MoE path 的集成。这样符合项目原则：先验证通信 primitive，再把它放进训练 runtime。
+
+### 17.2 Transformer Engine 面经
+
+### Q293. 面试官：Transformer Engine 是什么？
+
+答：Transformer Engine 可以理解成 NVIDIA 面向 Transformer 模型训练和推理的加速库，提供 FP8/更低精度支持、fused kernels 和 PyTorch/JAX 等接口。它不是单纯替换一个 Linear，而是把低精度、scaling、GEMM、LayerNorm、attention 和并行训练里的很多优化打包起来。
+
+MiniTrainBench 当前没有集成 TE。项目里和 TE 相关的证据，是 Megatron fallback 缺少 TE/APEX fused capability 时，把结果标为 compatibility smoke，而不是 performance benchmark。
+
+### Q294. 面试官：为什么 TE 不是普通 PyTorch Linear 的简单替换？
+
+答：因为 TE 的价值不只是模块 API 相似，而是背后有低精度 recipe、scaling metadata、fused kernel、Tensor Core 路径、并行训练支持和环境依赖。把 `nn.Linear` 换成 `te.Linear` 可能只是第一步，真正性能还取决于 dtype、shape、硬件、kernel 选择和是否进入 fused path。
+
+所以 benchmark TE 要记录 GPU 架构、TE 版本、CUDA/cuDNN、Megatron 配置、是否 FP8、是否 fused attention/LayerNorm、是否 fallback。否则“换了 TE 没变快”或“TE 更快”都说不清楚。
+
+### Q295. 面试官：FP8 和 BF16/FP16 怎么对比？
+
+答：BF16 指数范围大，训练稳定性通常比较好；FP16 精度和范围更敏感，常需要 loss scaling；FP8 进一步降低存储和计算成本，能提升吞吐、降低显存和带宽压力，但需要更复杂的 scaling 和硬件支持。
+
+训练 Infra 里 FP8 不是简单把 dtype 改掉。要记录 scaling recipe、amax history、哪些 op 用 FP8、哪些保持 BF16/FP32、checkpoint 是否保存必要状态，以及恢复后数值路径是否一致。MiniTrainBench 目前只覆盖 BF16/FP32。
+
+### Q296. 面试官：FP4、MXFP8、NVFP4 这类更低精度怎么讲才不虚？
+
+答：我会把它们讲成更激进的低精度格式，通常依赖更新硬件和更严格的软件栈，目标是进一步降低内存和计算成本。但它们比 FP8 更需要关注数值误差、scaling、kernel 支持和适用场景。
+
+面试里不应该装成自己生产用过。更稳的说法是：我知道 TE 文档已经覆盖 FP8，并在更新硬件上支持 MXFP8、NVFP4 这类路径；我当前项目没有验证这些格式，所以只能讲原理、约束和实验设计。
+
+### Q297. 面试官：amax history 和 scaling recipe 是什么？
+
+答：低精度训练里，需要把高精度 tensor 映射到 FP8 等低精度范围。amax 是一段时间内观察到的最大绝对值，scaling recipe 决定怎么用这些 amax 计算 scale，比如当前 scaling、delayed scaling 或 per-tensor/per-channel 等策略。
+
+它们会影响数值稳定性和性能。scale 太小容易溢出，太大又损失精度。checkpoint/resume 时如果 FP8 scaling 状态没有恢复，训练轨迹可能漂移。所以如果 MiniTrainBench 未来接 TE/FP8，scaling metadata 必须进入状态和 provenance。
+
+### Q298. 面试官：DelayedScaling 怎么口述？
+
+答：DelayedScaling 可以理解成用历史 amax 来决定当前或下一段计算的 scale，而不是每个 tensor 都即时重新估计。这样可以减少同步和统计开销，也让 scale 更新更平滑。
+
+但它带来一个状态问题：历史 amax buffer 和 scale 本身成为训练状态的一部分。恢复 checkpoint 时，如果这些状态缺失，就算模型权重和 optimizer 一样，后续 FP8 数值路径也可能不一致。
+
+### Q299. 面试官：TE 的 fused LayerNorm / fused attention / operation fuser 解决什么？
+
+答：它们主要减少 kernel launch、减少中间 tensor 物化、降低 HBM 读写，并利用专用 kernel 提高吞吐。Transformer block 里有很多小 op，如果都走普通 PyTorch eager 路径，调度和内存开销会很明显。
+
+但 fused kernel 的收益取决于 shape、硬件、dtype 和软件版本。小模型、短序列或 fallback 环境下不一定更快。MiniTrainBench 的 Megatron fallback 经验正好说明：kernel capability 是实验变量，必须记录。
+
+### Q300. 面试官：fuse weight gradient accumulation 是什么？
+
+答：普通训练里，weight gradient 计算和 gradient accumulation 可能是分开的路径；fuse weight gradient accumulation 是把权重梯度计算和累积更紧密地融合，减少额外读写和 kernel 调度开销。
+
+这对大模型和 micro-batch accumulation 有价值，但也会改变 profiler 里的 op 形态。验证时不能只看 loss，还要看 grad 是否一致、显存峰值、step time 和 checkpoint/resume 状态。当前 MiniTrainBench 没有 TE 这个融合路径。
+
+### Q301. 面试官：TE 和 Megatron 的关系怎么讲？
+
+答：Megatron 是大模型并行训练框架，负责 TP/PP/DP/EP、distributed optimizer、schedule 和 checkpoint 等系统逻辑；TE 提供 Transformer 层、低精度和 fused kernel 能力。两者经常配合：Megatron 管并行和训练流程，TE 管很多高性能 Transformer kernel。
+
+所以 Megatron fallback 环境缺 TE/APEX 时，能跑通 topology 不代表性能可比。MiniTrainBench 已经把这种情况标成 performance_valid=false，这个回答能体现我懂“框架能跑”和“性能栈完整”不是一回事。
+
+### Q302. 面试官：TE 和 TP/SP/MoE 有什么关系？
+
+答：TE 不只是单卡 kernel，它也会和 TP、SP、MoE 这类并行模式交互。比如 TE Linear 可能参与 tensor parallel；sequence parallel 会影响 LayerNorm/Dropout/activation 的布局；MoE 里可能需要 grouped linear、router、expert parallel 和 fused kernels 配合。
+
+系统难点是低精度状态、并行 shard、通信和 kernel metadata 要对齐。MiniTrainBench 有 toy TP/SP 和 toy MoE routing，但没有 TE 并行集成，所以只能讲这个交互关系和未来扩展方向。
+
+### Q303. 面试官：小模型上 TE 为什么可能不明显变快？
+
+答：小模型的 GEMM 可能不够大，kernel launch、框架调度、数据准备和通信固定开销占比高，fused kernel 的优势不一定能摊开。低精度还可能引入 cast、scale、amax 统计等额外开销。
+
+所以 TE benchmark 要选合适的模型规模、sequence length、batch size 和测量窗口。MiniTrainBench 的小模型结果一直强调不能外推大模型，这个原则同样适用于 TE。
+
+### Q304. 面试官：TE 接入后 checkpoint/resume 要多保存什么？
+
+答：除了 model、optimizer、scheduler、TrainState 和 RNG，还要考虑 FP8 scaling state、amax history、recipe 配置、TE module 状态、并行 shard metadata，以及软件版本。否则恢复后可能功能上能跑，但数值轨迹不一致。
+
+MiniTrainBench 现在没有 TE，所以 checkpoint v3 不包含这些状态。如果未来加 TE，我会先把它纳入 `checkpoint verify` 的比较范围，再发布 FP8 resume 结论。
+
+### 17.3 高压追问模板
+
+### Q305. 面试官：你项目没集成 FlagCX，为什么讲 FlagCX？
+
+答：我会直接说 FlagCX 是岗位知识储备和未来扩展方向，不是项目已实现能力。我的项目已经把 NCCL collective、MoE all-to-all、rank spread、provenance 和 communication benchmark 做出来了，所以我可以从这些已有证据自然迁移到异构通信库应该怎么接、怎么测、怎么排障。
+
+换句话说，我不是说“我用过 FlagCX 训练大模型”，而是说“我理解通信库在训练 Infra 里的位置，并知道要先从 collective benchmark 和 backend evidence 做起”。
+
+### Q306. 面试官：你项目没集成 TE/FP8，怎么证明你懂？
+
+答：我会承认 MiniTrainBench 只覆盖 BF16/FP32，没有 TE/FP8 实现。然后把理解落到系统层：TE 涉及 fused kernel、FP8 scaling、amax history、硬件支持、Megatron 集成和 checkpoint 状态；这些点会影响性能、数值稳定和恢复一致性。
+
+项目证据是我在 Megatron fallback 上没有混淆 compatibility smoke 和 performance benchmark。fallback 缺 TE/APEX fused capability 时，我把性能标为 invalid，这说明我理解 TE 是性能栈的一部分。
+
+### Q307. 面试官：NCCL 和 FlagCX benchmark 怎么避免自欺欺人？
+
+答：先固定实验协议，再公开实际 backend。必须记录设备类型、拓扑、rank 数、message size、dtype、warmup、repeat、是否独占、backend 版本和 fallback 状态。对于同构 NVIDIA，NCCL 是直接 baseline；对于异构设备，要说明 NCCL 是否适用，FlagCX 是否走 native x-CCL、IPC/RDMA 或 fallback。
+
+如果这些没记录，就不能说 FlagCX 比 NCCL 快或慢。最多说某个配置下 smoke 成功。MiniTrainBench 的 performance_valid 和 provenance 设计正是为了避免这种自欺欺人。
+
+### Q308. 面试官：TE fallback、NGC/TE 正式环境和 performance_valid 怎么区分？
+
+答：fallback 环境可以证明代码路径能跑，但缺少 TE/APEX fused kernels、Transformer Engine 低精度路径或官方推荐环境时，性能数字不能和 NGC/TE 正式环境横向比较。正式 performance benchmark 需要固定 base digest、TE import 成功、fused kernel capability 明确、GPU 独占、repeat 和完整 provenance。
+
+所以我会把 fallback 结果标成 compatibility，不展示或不发布吞吐结论。这个原则已经在 MiniTrainBench 的 Megatron smoke 里使用过。
+
+### Q309. 面试官：如果给 MiniTrainBench 加 FlagCX 和 TE，你先做哪个？
+
+答：如果目标是训练 Infra 岗位展示，我会先加 FlagCX 风格的 communication backend adapter，因为它能复用现有 comm benchmark，风险小，边界清楚。先把 all-reduce、all-gather、reduce-scatter、all-to-all 的 backend/provenance/schema 做好，再讨论接入训练主循环。
+
+TE 我会作为第二步，因为它会影响模型模块、dtype、scaling state、checkpoint 和 profiler，需要更完整的 correctness 和 resume 验证。两者都不应该一上来追性能数字，先要证明语义和证据链可靠。
+
+### Q310. 面试官：SeedInfra 面试里怎么把异构通信和低精度训练讲得不虚？
+
+答：我会把它们都落到训练系统 contract。异构通信不是背库名，而是讲 collective 语义、backend 路径、拓扑、fallback 和 benchmark 公平性；低精度训练不是背 FP8 名字，而是讲 scaling state、fused kernel、硬件支持、数值稳定、checkpoint 和 provenance。
+
+最后再主动说边界：MiniTrainBench 当前没集成 FlagCX/TE，但它已经有通信 benchmark、profiler、环境锁定和 performance_valid 这些地基。我的准备方向是先把这些系统方法讲清楚，再补具体库的实战。
