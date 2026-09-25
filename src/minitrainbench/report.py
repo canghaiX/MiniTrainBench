@@ -106,7 +106,9 @@ def render_report(paths: list[str]) -> str:
     payloads = [_load(path) for path in paths]
     training = [item for item in payloads if item.get("benchmark") == "training"]
     tp_dp_training = [
-        item for item in payloads if item.get("benchmark") == "tp_dp_training"
+        item
+        for item in payloads
+        if item.get("benchmark") in {"tp_dp_training", "tp_dp_transformer_training"}
     ]
     communication = [
         row
@@ -336,10 +338,10 @@ def render_report(paths: list[str]) -> str:
                 "### TP + DP 训练",
                 "",
                 (
-                    "| TP | DP | GPU 数 | 精度 | Tokens/sec | Step P50 (ms) | "
+                    "| Benchmark | TP | DP | GPU 数 | 精度 | Tokens/sec | Step P50 (ms) | "
                     "Step P95 (ms) | 通信估算 (bytes/step) | 正确性 |"
                 ),
-                "| ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |",
+                "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | --- |",
             ]
         )
         for item in sorted(
@@ -348,7 +350,8 @@ def render_report(paths: list[str]) -> str:
         ):
             correctness = item.get("correctness", {})
             lines.append(
-                f"| {item.get('tp_degree', '-')} | {item.get('dp_degree', '-')} | "
+                f"| {item.get('benchmark', '-')} | {item.get('tp_degree', '-')} | "
+                f"{item.get('dp_degree', '-')} | "
                 f"{item.get('world_size', '-')} | {item.get('precision', '-')} | "
                 f"{float(item.get('tokens_per_sec', 0.0)):.2f} | "
                 f"{float(item.get('step_time_p50_ms', 0.0)):.3f} | "

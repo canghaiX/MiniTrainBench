@@ -37,7 +37,7 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 | Fault tolerance | injected + resume evidence | NaN fail-fast、真实 rank crash、手工重启后精确恢复 |
 | LR scheduler / gradient health | implemented | constant/cosine、全局 gradient norm、梯度裁剪、全 rank fail-fast |
 | MoE | all-to-all microbenchmark + routing demo | equal/uneven split、MoE token dispatch 设计笔记 |
-| Tensor Parallel | TP/DP training + toy correctness | 4 卡 TP=2/DP=2 训练、forward/backward 对照、P50/P95 与通信估算 |
+| Tensor Parallel | TP/DP training + Transformer correctness | 4 卡 TP=2/DP=2 MLP 与真实 pre-norm Transformer Block、局部梯度对照、P50/P95 与通信估算 |
 | Megatron-LM | external compatibility smoke | `core_v0.18.2` 五组 8 卡 TP/PP/DP 已跑通；NGC repeat=3 性能待补 |
 | Memory pressure | 8 卡 benchmarked | 23.2M/168.5M/731.1M/2.60B 的 DDP/FSDP/ZeRO 成功与 OOM 证据 |
 | Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
@@ -70,6 +70,10 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 - 提供 `minitrainbench tp train`：在同一 `torchrun` job 内建立 TP/DP process group，
   运行可训练的 Column/Row-style MLP，分别处理 TP 输出归约、复制参数梯度和 DP 梯度同步，
   并在训练前自动对照单卡 reference 的 forward、loss 与局部参数梯度。
+- 提供 `minitrainbench tp transformer-train`：运行真实 pre-norm Transformer Block，
+  覆盖 LayerNorm、Column Parallel QKV、TP-local MHA、Row Parallel attention output、
+  Column/Row Parallel MLP 和两次 residual；设计边界见
+  [`docs/transformer_tp_dp_design.md`](docs/transformer_tp_dp_design.md)。
 - 提供 toy MoE routing demo，记录 top-1 dispatch、capacity、overflow 和 load imbalance。
 - 提供显存压力矩阵和固定版本的 Megatron-LM 外部运行脚本；五组 8 卡 TP/PP/DP
   topology 已完成兼容性 smoke，并将非独占 fallback 的性能指标明确标为无效。
@@ -370,6 +374,21 @@ GPU 版本可直接运行：
 ```bash
 IMAGE=minitrainbench:gpu scripts/run_tp_dp_smoke.sh
 ```
+
+运行真实 Transformer Block 的 TP+DP smoke：
+
+```bash
+torchrun --standalone --nproc_per_node=4 \
+  -m minitrainbench tp transformer-train \
+  --device cpu --backend gloo --tp-size 2 --precision fp32 \
+  --d-model 8 --n-heads 2 --mlp-hidden-size 16 \
+  --batch-size 1 --seq-length 3 --steps 1 --warmup-steps 0 \
+  --output results/tp_dp_transformer/tp2_dp2_cpu.json
+```
+
+GPU 复现实验脚本为 `scripts/run_tp_dp_transformer_smoke.sh`；默认使用 4 个进程、
+TP=2/DP=2、BF16 和 `d_model=128`。`transformer-train` 会在训练前检查完整
+reference forward/loss/局部参数梯度，并输出独立的 benchmark schema 字段。
 
 `tp train` 的 correctness probe 会在训练前检查 TP all-reduce、TP replicated bias
 gradient、DP gradient averaging 与 reference 的误差；BF16 使用相对 L2 容差，FP32 使用
