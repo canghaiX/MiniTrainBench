@@ -21,9 +21,10 @@ Megatron-LM 的真实框架读码对照见 [Megatron 工程 Case Study](docs/meg
 - [项目复盘与面试指南](docs/interview_guide.md)：包含 90 秒项目介绍、架构重点、高频追问和
   项目边界。
 
-建议先按学习指南跑 CPU/Gloo 最小路径，再阅读错误手册理解实验可信度，最后用面试指南
-整理表达。性能数字应以 `results/` 中带 provenance 的结果为准；Megatron 当前公开的是
-compatibility smoke，NGC repeat=3 正式性能矩阵尚未发布。
+建议先按学习指南跑 CPU/Gloo 最小路径，再运行 `tp train` 观察真实 TP/DP 梯度同步，
+阅读错误手册理解实验可信度，最后用面试指南整理表达。性能数字应以 `results/` 中带
+provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，NGC repeat=3 正式
+性能矩阵尚未发布。
 
 ## 能力矩阵
 
@@ -36,7 +37,7 @@ compatibility smoke，NGC repeat=3 正式性能矩阵尚未发布。
 | Fault tolerance | injected + resume evidence | NaN fail-fast、真实 rank crash、手工重启后精确恢复 |
 | LR scheduler / gradient health | implemented | constant/cosine、全局 gradient norm、梯度裁剪、全 rank fail-fast |
 | MoE | all-to-all microbenchmark + routing demo | equal/uneven split、MoE token dispatch 设计笔记 |
-| Tensor Parallel | toy correctness check + notes | Column/Row Parallel Linear、TP MLP、Sequence Parallel |
+| Tensor Parallel | TP/DP training + toy correctness | 4 卡 TP=2/DP=2 训练、forward/backward 对照、P50/P95 与通信估算 |
 | Megatron-LM | external compatibility smoke | `core_v0.18.2` 五组 8 卡 TP/PP/DP 已跑通；NGC repeat=3 性能待补 |
 | Memory pressure | 8 卡 benchmarked | 23.2M/168.5M/731.1M/2.60B 的 DDP/FSDP/ZeRO 成功与 OOM 证据 |
 | Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
@@ -66,6 +67,9 @@ compatibility smoke，NGC repeat=3 正式性能矩阵尚未发布。
   LR、全局 gradient norm 和裁剪步数，并在 loss/gradient 非有限时让所有 rank 一致 fail-fast。
 - 提供 toy tensor parallel correctness check，验证 Column/Row Parallel Linear
   与单卡 reference 的 forward/backward 一致性，并补了 toy MLP 与 sequence parallel demo。
+- 提供 `minitrainbench tp train`：在同一 `torchrun` job 内建立 TP/DP process group，
+  运行可训练的 Column/Row-style MLP，分别处理 TP 输出归约、复制参数梯度和 DP 梯度同步，
+  并在训练前自动对照单卡 reference 的 forward、loss 与局部参数梯度。
 - 提供 toy MoE routing demo，记录 top-1 dispatch、capacity、overflow 和 load imbalance。
 - 提供显存压力矩阵和固定版本的 Megatron-LM 外部运行脚本；五组 8 卡 TP/PP/DP
   topology 已完成兼容性 smoke，并将非独占 fallback 的性能指标明确标为无效。
@@ -350,6 +354,28 @@ torchrun --standalone --nproc_per_node=2 -m minitrainbench tp check \
   --device cpu --backend gloo --batch-size 1 --seq-length 2 \
   --in-features 8 --out-features 8 --output results/tp_check_cpu.json
 ```
+
+运行可训练的 TP+DP smoke（4 个进程、TP=2、DP=2）：
+
+```bash
+torchrun --standalone --nproc_per_node=4 -m minitrainbench tp train \
+  --device cpu --backend gloo --tp-size 2 --precision fp32 \
+  --batch-size 1 --seq-length 2 --in-features 4 \
+  --hidden-features 8 --out-features 4 --steps 2 --warmup-steps 0 \
+  --output results/tp_dp/tp2_dp2_cpu.json
+```
+
+GPU 版本可直接运行：
+
+```bash
+IMAGE=minitrainbench:gpu scripts/run_tp_dp_smoke.sh
+```
+
+`tp train` 的 correctness probe 会在训练前检查 TP all-reduce、TP replicated bias
+gradient、DP gradient averaging 与 reference 的误差；BF16 使用相对 L2 容差，FP32 使用
+绝对误差。benchmark 结果使用 schema version 2，并记录 TP/DP degree、P50/P95 step time
+和每步通信量估算。该入口聚焦并行语义，不包含 GPT 全模型、checkpoint 或 optimizer
+state sharding。
 
 运行 toy MoE routing、TP MLP / Sequence Parallel 和故障恢复 smoke：
 

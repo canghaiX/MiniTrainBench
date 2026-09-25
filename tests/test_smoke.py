@@ -111,6 +111,7 @@ def test_cpu_training_smoke(tmp_path) -> None:
     assert result["runtime"]["lr_scheduler"] == "constant"
     assert result["runtime"]["scheduler_completed_steps"] == 1
     assert result["grad_norm"] > 0
+    assert result["schema_version"] == 2
 
 
 def test_repeat_summary_skips_adapter_specific_metrics() -> None:
@@ -1669,6 +1670,63 @@ def test_tensor_parallel_cpu_check(tmp_path) -> None:
     assert sequence_result["collective_count"] == 3
 
 
+def test_tp_dp_training_cpu_smoke(tmp_path) -> None:
+    output = tmp_path / "tp_dp.json"
+    environment = os.environ.copy()
+    environment["OMP_NUM_THREADS"] = "1"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nproc_per_node=4",
+            "--module",
+            "minitrainbench",
+            "tp",
+            "train",
+            "--device",
+            "cpu",
+            "--backend",
+            "gloo",
+            "--tp-size",
+            "2",
+            "--batch-size",
+            "1",
+            "--seq-length",
+            "2",
+            "--in-features",
+            "4",
+            "--hidden-features",
+            "8",
+            "--out-features",
+            "4",
+            "--steps",
+            "1",
+            "--warmup-steps",
+            "0",
+            "--atol",
+            "1e-3",
+            "--output",
+            str(output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=240,
+    )
+    result = json.loads(output.read_text())
+    assert result["benchmark"] == "tp_dp_training"
+    assert result["status"] == "ok"
+    assert result["world_size"] == 4
+    assert result["tp_degree"] == 2
+    assert result["dp_degree"] == 2
+    assert result["correctness"]["status"] == "ok"
+    assert result["correctness"]["max_error"] <= 1e-3
+    assert result["tokens_per_sec"] > 0
+
+
 def test_report_renders_infra_metrics(tmp_path) -> None:
     payloads = {
         "ddp_1.json": {
@@ -1840,6 +1898,19 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
             "collective_count": 3,
             "communication_bytes": 256,
         },
+        "tp_dp.json": {
+            "benchmark": "tp_dp_training",
+            "status": "ok",
+            "world_size": 4,
+            "tp_degree": 2,
+            "dp_degree": 2,
+            "precision": "fp32",
+            "tokens_per_sec": 800.0,
+            "step_time_p50_ms": 2.0,
+            "step_time_p95_ms": 2.5,
+            "communication_bytes_per_step_estimate": 1024,
+            "correctness": {"status": "ok"},
+        },
         "fault.json": {
             "benchmark": "fault_tolerance",
             "failure_handling": [
@@ -1915,3 +1986,5 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
     assert "Megatron-style Toy Runtime 正确性" in report
     assert "MoE Routing / Expert Parallel" in report
     assert "Failure Handling" in report
+    assert "TP + DP 训练" in report
+    assert "1024" in report

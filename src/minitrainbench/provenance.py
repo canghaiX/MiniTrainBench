@@ -7,6 +7,8 @@ from typing import Any
 
 import torch
 
+RESULT_SCHEMA_VERSION = 2
+
 PROVENANCE_ENV_KEYS = {
     "git_revision": "MINITRAINBENCH_GIT_REVISION",
     "image_ref": "MINITRAINBENCH_IMAGE_REF",
@@ -124,6 +126,7 @@ def collect_provenance() -> dict[str, Any]:
 
 
 def enrich_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    payload.setdefault("schema_version", RESULT_SCHEMA_VERSION)
     environment = collect_environment()
     environment.update(payload.get("environment", {}))
     payload["environment"] = environment

@@ -1,8 +1,8 @@
 # Megatron-style 并行训练笔记
 
 本文档记录 Tensor Parallel、Pipeline Parallel 和 Sequence Parallel 的基本语义。项目当前
-实现 toy TP correctness、toy TP MLP 和 sequence parallel correctness demo，不实现完整
-TP/PP/SP 训练 Runtime。
+同时提供 toy correctness demo，以及一个可训练的 TP+DP MLP Runtime；它不试图复刻完整
+Megatron，也不实现 PP schedule 或生产级 distributed optimizer。
 
 ## Tensor Parallel
 
@@ -36,6 +36,13 @@ Y = sum_i Xi @ Wi
 MiniTrainBench 的 `minitrainbench tp check` 会把 toy `ColumnParallelLinear` 和
 `RowParallelLinear` 与单卡 reference 对齐，比较 forward、input grad、weight grad 和
 bias grad 的最大误差。
+
+`minitrainbench tp train` 将 TP MLP 接入 optimizer loop，支持 TP/DP 二维 process group。
+rank layout 为 `tp_rank = global_rank % tp_size`、`dp_rank = global_rank // tp_size`；
+TP group 归约 row-parallel 输出，显式同步 TP replicated bias 梯度，DP group 平均各参数梯度。
+训练前以各 DP rank 不同的输入，与完整 MLP reference 对照 forward、loss 和局部参数梯度。
+该命令是训练语义和通信的教学型/基准型实现，不包含 GPT 全模型、checkpoint 或 optimizer
+state sharding。
 
 ## Pipeline Parallel
 

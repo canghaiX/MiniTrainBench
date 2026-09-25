@@ -14,6 +14,7 @@ from .tensor_parallel import (
     tensor_parallel_mlp_check,
     tensor_parallel_sequence_check,
 )
+from .tp_training import tp_dp_train
 from .training import train
 from .verification import verify_checkpoints
 
@@ -225,6 +226,26 @@ def build_parser() -> argparse.ArgumentParser:
     tp_sequence_parser.add_argument("--atol", type=float, default=1e-3)
     tp_sequence_parser.add_argument("--output", default=None)
 
+    tp_train_parser = tp_subparsers.add_parser(
+        "train",
+        help="运行可训练的 TP+DP MLP benchmark",
+    )
+    _add_common_distributed_arguments(tp_train_parser)
+    tp_train_parser.add_argument("--tp-size", type=int, default=2)
+    tp_train_parser.add_argument("--precision", choices=["fp32", "bf16"], default="fp32")
+    tp_train_parser.add_argument("--batch-size", type=int, default=2)
+    tp_train_parser.add_argument("--seq-length", type=int, default=8)
+    tp_train_parser.add_argument("--in-features", type=int, default=16)
+    tp_train_parser.add_argument("--hidden-features", type=int, default=32)
+    tp_train_parser.add_argument("--out-features", type=int, default=16)
+    tp_train_parser.add_argument("--learning-rate", type=float, default=1e-3)
+    tp_train_parser.add_argument("--steps", type=int, default=10)
+    tp_train_parser.add_argument("--warmup-steps", type=int, default=2)
+    tp_train_parser.add_argument("--seed", type=int, default=2026)
+    tp_train_parser.add_argument("--atol", type=float, default=1e-3)
+    tp_train_parser.add_argument("--rtol", type=float, default=5e-2)
+    tp_train_parser.add_argument("--output", default=None)
+
     moe_parser = subparsers.add_parser("moe", help="运行 toy MoE routing/dispatch 检查")
     moe_subparsers = moe_parser.add_subparsers(dest="moe_command", required=True)
     moe_route_parser = moe_subparsers.add_parser(
@@ -412,6 +433,30 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(str(error)) from None
         if result is not None and result["status"] != "ok":
             raise SystemExit("Sequence Parallel 正确性检查失败，详见输出 JSON")
+    elif args.command == "tp" and args.tp_command == "train":
+        if (
+            args.tp_size < 1
+            or args.batch_size < 1
+            or args.seq_length < 1
+            or args.in_features < 1
+            or args.hidden_features < 1
+            or args.out_features < 1
+            or args.learning_rate <= 0
+            or args.steps < 1
+            or args.warmup_steps < 0
+            or args.atol <= 0
+            or args.rtol <= 0
+        ):
+            raise SystemExit(
+                "tp-size、batch-size、seq-length、特征维度和 steps 必须为正数；"
+                "learning-rate、atol 必须大于 0；warmup-steps 不能为负数"
+            )
+        try:
+            result = tp_dp_train(args)
+        except (RuntimeError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        if result is not None and result["status"] != "ok":
+            raise SystemExit("TP/DP 训练正确性检查失败，详见输出 JSON")
     elif args.command == "moe" and args.moe_command == "route":
         if (
             args.tokens_per_rank < 1
