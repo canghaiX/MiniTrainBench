@@ -42,6 +42,7 @@ from minitrainbench.tp_transformer_training import (
     validate_transformer_shape,
     validate_transformer_world_size,
 )
+from minitrainbench.tp_lm_training import validate_lm_shape
 from minitrainbench.verification import _validate_pair
 
 
@@ -1741,6 +1742,16 @@ def test_transformer_shape_validation() -> None:
         validate_transformer_shape(8, 2, 15, 2)
 
 
+def test_lm_shape_validation() -> None:
+    validate_lm_shape(32, 8, 2, 2, 16, 2)
+    with pytest.raises(ValueError, match="vocab-size"):
+        validate_lm_shape(31, 8, 2, 2, 16, 2)
+    with pytest.raises(ValueError, match="n-heads"):
+        validate_lm_shape(32, 12, 3, 2, 16, 2)
+    with pytest.raises(ValueError, match="mlp-hidden-size"):
+        validate_lm_shape(32, 8, 2, 2, 15, 2)
+
+
 def test_tp_dp_transformer_training_cpu_smoke(tmp_path) -> None:
     output = tmp_path / "tp_dp_transformer.json"
     environment = os.environ.copy()
@@ -1797,6 +1808,73 @@ def test_tp_dp_transformer_training_cpu_smoke(tmp_path) -> None:
     assert result["correctness"]["forward_max_error"] <= 1e-4
     assert result["correctness"]["data_parallel_batches_distinct"] is True
     assert result["correctness"]["dp_parameters_consistent_after_step"] is True
+    assert result["tokens_per_sec"] > 0
+
+
+def test_tp_dp_causal_lm_training_cpu_smoke(tmp_path) -> None:
+    output = tmp_path / "tp_dp_lm.json"
+    environment = os.environ.copy()
+    environment["OMP_NUM_THREADS"] = "1"
+    environment["MKL_NUM_THREADS"] = "1"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nproc_per_node=4",
+            "--module",
+            "minitrainbench",
+            "tp",
+            "lm-train",
+            "--device",
+            "cpu",
+            "--backend",
+            "gloo",
+            "--tp-size",
+            "2",
+            "--precision",
+            "fp32",
+            "--vocab-size",
+            "32",
+            "--d-model",
+            "8",
+            "--n-heads",
+            "2",
+            "--n-layers",
+            "2",
+            "--mlp-hidden-size",
+            "16",
+            "--batch-size",
+            "1",
+            "--seq-length",
+            "3",
+            "--steps",
+            "1",
+            "--warmup-steps",
+            "0",
+            "--output",
+            str(output),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=240,
+    )
+    result = json.loads(output.read_text())
+    assert result["benchmark"] == "tp_dp_causal_lm_training"
+    assert result["benchmark_schema_version"] == 1
+    assert result["task"] == "causal_lm"
+    assert result["world_size"] == 4
+    assert result["tp_degree"] == 2
+    assert result["dp_degree"] == 2
+    assert result["correctness"]["status"] == "ok"
+    assert result["correctness"]["forward_max_error"] <= 1e-4
+    assert result["correctness"]["max_parameter_gradient_error"] <= 1e-4
+    assert result["correctness"]["data_parallel_batches_distinct"] is True
+    assert result["correctness"]["dp_parameters_consistent_after_step"] is True
+    assert result["perplexity"] > 1.0
     assert result["tokens_per_sec"] > 0
 
 
@@ -1997,6 +2075,19 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
             "communication_bytes_per_step_estimate": 2048,
             "correctness": {"status": "ok"},
         },
+        "tp_dp_lm.json": {
+            "benchmark": "tp_dp_causal_lm_training",
+            "status": "ok",
+            "world_size": 4,
+            "tp_degree": 2,
+            "dp_degree": 2,
+            "precision": "fp32",
+            "tokens_per_sec": 650.0,
+            "step_time_p50_ms": 3.2,
+            "step_time_p95_ms": 3.8,
+            "communication_bytes_per_step_estimate": 2048,
+            "correctness": {"status": "ok"},
+        },
         "fault.json": {
             "benchmark": "fault_tolerance",
             "failure_handling": [
@@ -2074,4 +2165,5 @@ def test_report_renders_infra_metrics(tmp_path) -> None:
     assert "Failure Handling" in report
     assert "TP + DP 训练" in report
     assert "tp_dp_transformer_training" in report
+    assert "tp_dp_causal_lm_training" in report
     assert "1024" in report

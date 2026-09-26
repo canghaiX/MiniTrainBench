@@ -37,7 +37,7 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 | Fault tolerance | injected + resume evidence | NaN fail-fast、真实 rank crash、手工重启后精确恢复 |
 | LR scheduler / gradient health | implemented | constant/cosine、全局 gradient norm、梯度裁剪、全 rank fail-fast |
 | MoE | all-to-all microbenchmark + routing demo | equal/uneven split、MoE token dispatch 设计笔记 |
-| Tensor Parallel | TP/DP training + Transformer correctness | 4 卡 TP=2/DP=2 MLP 与真实 pre-norm Transformer Block、局部梯度对照、P50/P95 与通信估算 |
+| Tensor Parallel | TP/DP training + Transformer correctness | 4 卡 TP=2/DP=2 MLP、真实 pre-norm Transformer Block，以及 vocab-parallel causal LM、局部梯度对照、P50/P95 与通信估算 |
 | Megatron-LM | external compatibility smoke | `core_v0.18.2` 五组 8 卡 TP/PP/DP 已跑通；NGC repeat=3 性能待补 |
 | Memory pressure | 8 卡 benchmarked | 23.2M/168.5M/731.1M/2.60B 的 DDP/FSDP/ZeRO 成功与 OOM 证据 |
 | Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
@@ -74,6 +74,11 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
   覆盖 LayerNorm、Column Parallel QKV、TP-local MHA、Row Parallel attention output、
   Column/Row Parallel MLP 和两次 residual；设计边界见
   [`docs/transformer_tp_dp_design.md`](docs/transformer_tp_dp_design.md)。
+- 提供 `minitrainbench tp lm-train`：在多层 Transformer 上增加 vocab-sharded token
+  embedding、untied vocab-sharded LM head 和显式 vocab-parallel cross entropy；TP/DP
+  correctness probe 同时对照 dense causal-LM reference 的 logits、loss、局部梯度和
+  optimizer step 后的 DP replica 一致性；设计边界见
+  [`docs/vocab_parallel_lm_design.md`](docs/vocab_parallel_lm_design.md)。
 - 提供 toy MoE routing demo，记录 top-1 dispatch、capacity、overflow 和 load imbalance。
 - 提供显存压力矩阵和固定版本的 Megatron-LM 外部运行脚本；五组 8 卡 TP/PP/DP
   topology 已完成兼容性 smoke，并将非独占 fallback 的性能指标明确标为无效。
@@ -389,6 +394,22 @@ torchrun --standalone --nproc_per_node=4 \
 GPU 复现实验脚本为 `scripts/run_tp_dp_transformer_smoke.sh`；默认使用 4 个进程、
 TP=2/DP=2、BF16 和 `d_model=128`。`transformer-train` 会在训练前检查完整
 reference forward/loss/局部参数梯度，并输出独立的 benchmark schema 字段。
+
+运行多层 vocab-parallel causal LM 的 TP+DP smoke：
+
+```bash
+torchrun --standalone --nproc_per_node=4 \
+  -m minitrainbench tp lm-train \
+  --device cuda --backend nccl --tp-size 2 --precision bf16 \
+  --vocab-size 1024 --d-model 128 --n-heads 8 --n-layers 2 \
+  --mlp-hidden-size 512 --batch-size 2 --seq-length 32 \
+  --steps 10 --warmup-steps 3 \
+  --output results/tp_dp_lm/tp2_dp2.json
+```
+
+无 GPU 时可运行 `scripts/run_tp_dp_lm_smoke.sh` 的 CPU/Gloo 版本；它会检查
+vocab-parallel loss、gathered logits、局部梯度、不同 DP batch 和 optimizer step 后的
+replica 一致性。
 
 `tp train` 的 correctness probe 会在训练前检查 TP all-reduce、TP replicated bias
 gradient、DP gradient averaging 与 reference 的误差；BF16 使用相对 L2 容差，FP32 使用

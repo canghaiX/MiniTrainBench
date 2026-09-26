@@ -108,7 +108,8 @@ def render_report(paths: list[str]) -> str:
     tp_dp_training = [
         item
         for item in payloads
-        if item.get("benchmark") in {"tp_dp_training", "tp_dp_transformer_training"}
+        if item.get("benchmark")
+        in {"tp_dp_training", "tp_dp_transformer_training", "tp_dp_causal_lm_training"}
     ]
     communication = [
         row
@@ -364,7 +365,8 @@ def render_report(paths: list[str]) -> str:
                 "",
                 (
                     "TP group 负责列/行切分和输出 all-reduce，DP group 负责 optimizer "
-                    "gradient all-reduce；正确性列同时检查 forward、loss 和局部参数梯度。"
+                    "gradient all-reduce；causal LM 额外使用 vocab-parallel cross entropy，"
+                    "正确性列同时检查 forward、loss 和局部参数梯度。"
                 ),
             ]
         )
