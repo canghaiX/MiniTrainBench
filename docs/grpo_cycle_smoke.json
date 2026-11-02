@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "measurement_scope": "functional smoke without warmup; metrics are not a performance claim",
+  "initial_rollout_model_fingerprint": "7576f6c6024b9615986975880a6fb97c477f1bd0746724f9f377e19f1b24200b",
+  "updated_rollout_model_fingerprint": "2440a479f1edd2aa7694afcf6c1195c5f8fe26dc7de89b4198122fd36ca34d20",
+  "initial_rollout": {
+    "type": "manifest",
+    "schema_version": 1,
+    "architecture": "LlamaForCausalLM",
+    "model_source": {
+      "type": "random",
+      "download": false
+    },
+    "model_fingerprint": "7576f6c6024b9615986975880a6fb97c477f1bd0746724f9f377e19f1b24200b",
+    "tokenizer_fingerprint": "079742491f340195e985fea71c63cc7951ad8b6c70e182e576894ebb2caf6ddc",
+    "tokenizer_mode": "token_ids",
+    "vocab_size": 8,
+    "sampling": {
+      "temperature": 0.8,
+      "top_p": 1.0,
+      "seed": 2026
+    },
+    "logprob_convention": "temperature_scaled_untruncated_policy",
+    "generation": {
+      "max_new_tokens": 8,
+      "num_generations": 16,
+      "eos_token_ids": [
+        2
+      ]
+    },
+    "reward_function": "token_prefix_accuracy_v1",
+    "prompt_group_count": 4,
+    "backend": "paged_sdpa",
+    "dtype": "bfloat16",
+    "append_backend": "torch",
+    "prefill_mode": "batched",
+    "prefill_latency_ms": 411.67081892490387,
+    "ttft_ms": 483.16783644258976,
+    "tpot_ms": 23.613221826963127,
+    "decode_p50_ms": 18.572256434708834,
+    "decode_p95_ms": 55.058830976486185,
+    "peak_kv_memory_bytes": 32768,
+    "peak_memory_allocated_bytes": 8704512,
+    "response_tokens": 296,
+    "decode_tokens_per_sec": 1566.9187487897552,
+    "cache_released": true,
+    "environment": {
+      "python": "3.10.12",
+      "torch": "2.6.0+cu124",
+      "device": "cuda",
+      "gpu": "NVIDIA A100-SXM4-40GB"
+    },
+    "provenance": {
+      "git_revision": "2a4ea10984379a2c1ba9572d79c06a375dd16c0f",
+      "git_dirty": true,
+      "source_sha256": "f7f14043b989a979b3da1a9559c8fd738861e069fcdcf1ed7af04013a26f6744",
+      "command": "/data/InferKernelLab/src/inferkernellab/rollout.py --model-source random --export-model-path /tmp/grpo-cycle-a100-delivery/initial-policy --prompts /data/MiniTrainBench/examples/grpo_prompts.jsonl --output /tmp/grpo-cycle-a100-delivery/rollouts.jsonl --device cuda --dtype bfloat16 --vocab-size 8 --hidden-size 16 --intermediate-size 32 --num-layers 1 --num-attention-heads 4 --num-kv-heads 2 --max-position-embeddings 128 --num-generations 16 --max-new-tokens 8 --temperature 0.8 --top-p 1.0 --seed 2026"
+    }
+  },
+  "updated_rollout_manifest": {
+    "type": "manifest",
+    "schema_version": 1,
+    "architecture": "LlamaForCausalLM",
+    "model_source": {
+      "type": "path",
+      "path": "/tmp/grpo-cycle-a100-delivery/updated-policy",
+      "download": false
+    },
+    "model_fingerprint": "2440a479f1edd2aa7694afcf6c1195c5f8fe26dc7de89b4198122fd36ca34d20",
+    "tokenizer_fingerprint": "079742491f340195e985fea71c63cc7951ad8b6c70e182e576894ebb2caf6ddc",
+    "tokenizer_mode": "token_ids",
+    "vocab_size": 8,
+    "sampling": {
+      "temperature": 0.8,
+      "top_p": 1.0,
+      "seed": 2027
+    },
+    "logprob_convention": "temperature_scaled_untruncated_policy",
+    "generation": {
+      "max_new_tokens": 8,
+      "num_generations": 16,
+      "eos_token_ids": [
+        2
+      ]
+    },
+    "reward_function": "token_prefix_accuracy_v1",
+    "prompt_group_count": 4,
+    "backend": "paged_sdpa",
+    "dtype": "bfloat16",
+    "append_backend": "torch",
+    "prefill_mode": "batched",
+    "prefill_latency_ms": 374.66546427458525,
+    "ttft_ms": 443.4384638443589,
+    "tpot_ms": 23.074495373293757,
+    "decode_p50_ms": 18.130715005099773,
+    "decode_p95_ms": 53.315759589895585,
+    "peak_kv_memory_bytes": 32768,
+    "peak_memory_allocated_bytes": 8704512,
+    "response_tokens": 292,
+    "decode_tokens_per_sec": 1581.833076282345,
+    "cache_released": true,
+    "environment": {
+      "python": "3.10.12",
+      "torch": "2.6.0+cu124",
+      "device": "cuda",
+      "gpu": "NVIDIA A100-SXM4-40GB"
+    },
+    "provenance": {
+      "git_revision": "2a4ea10984379a2c1ba9572d79c06a375dd16c0f",
+      "git_dirty": true,
+      "source_sha256": "f7f14043b989a979b3da1a9559c8fd738861e069fcdcf1ed7af04013a26f6744",
+      "command": "/data/InferKernelLab/src/inferkernellab/rollout.py --model-source path --model-path /tmp/grpo-cycle-a100-delivery/updated-policy --prompts /data/MiniTrainBench/examples/grpo_prompts.jsonl --output /tmp/grpo-cycle-a100-delivery/updated-rollouts.jsonl --device cuda --dtype bfloat16 --num-generations 16 --max-new-tokens 8 --temperature 0.8 --top-p 1.0 --seed 2027"
+    }
+  },
+  "training": {
+    "benchmark": "grpo_training",
+    "checkpoint_dir": "/tmp/grpo-cycle-a100-delivery/checkpoints",
+    "clip_fraction_mean": 0.0,
+    "command": [
+      "/data/MiniTrainBench/src/minitrainbench/__main__.py",
+      "rl",
+      "grpo-train",
+      "--model-path",
+      "/tmp/grpo-cycle-a100-delivery/initial-policy",
+      "--rollouts",
+      "/tmp/grpo-cycle-a100-delivery/rollouts.jsonl",
+      "--output-model",
+      "/tmp/grpo-cycle-a100-delivery/updated-policy",
+      "--output",
+      "/tmp/grpo-cycle-a100-delivery/training.json",
+      "--device",
+      "cuda",
+      "--backend",
+      "nccl",
+      "--precision",
+      "bf16",
+      "--steps",
+      "2",
+      "--groups-per-step",
+      "1",
+      "--learning-rate",
+      "0.0001",
+      "--kl-coef",
+      "0.01",
+      "--checkpoint-dir",
+      "/tmp/grpo-cycle-a100-delivery/checkpoints",
+      "--save-every",
+      "1"
+    ],
+    "dp_parameters_consistent": true,
+    "environment": {
+      "cuda": "12.4",
+      "cudnn": "90100",
+      "device": "cuda:0",
+      "driver": "580.173.02",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "gpu_count": 8,
+      "nccl": "2.21.5",
+      "python": "3.10.12",
+      "torch": "2.6.0+cu124"
+    },
+    "global_step": 2,
+    "grad_norm_max": 0.7952345013618469,
+    "initial_logprob_max_error": 0.0013797283172607422,
+    "initial_policy_fingerprint": "7576f6c6024b9615986975880a6fb97c477f1bd0746724f9f377e19f1b24200b",
+    "loss_mean": -3.3132731914520264e-05,
+    "optimizer_updated": true,
+    "output_model": "/tmp/grpo-cycle-a100-delivery/updated-policy",
+    "peak_memory_allocated_bytes": 17448960,
+    "policy_state_sha256": "fd134a51a6fb63cede293bb16e8708e31434ad3b1d9bcc514bf3f849c5253f2e",
+    "precision": "bf16",
+    "prompt_groups": 4,
+    "provenance": {
+      "base_image": null,
+      "build_revision": null,
+      "command": null,
+      "complete": false,
+      "git_dirty": true,
+      "git_revision": "52f5250b0cc9ffccba32d5082c88db256c42febe",
+      "image_id": null,
+      "image_ref": null,
+      "missing_fields": [
+        "base_image",
+        "build_revision",
+        "clean_worktree",
+        "command",
+        "image_id",
+        "image_ref"
+      ]
+    },
+    "response_tokens_seen": 296,
+    "responses_per_group": 16,
+    "resumed": false,
+    "reward_mean": 0.015625,
+    "rollout_sha256": "ea3391b1583721bcbf9d5b896baf72480578241370860dfcc52a0c7c82211bd5",
+    "sampled_kl_mean": 6.901366305100964e-07,
+    "schema_version": 1,
+    "source_sha256": "be5231556fda8dee6891b9372b5e29613fcb7e5f786bd7ad9bcf52d28863a362",
+    "status": "ok",
+    "step_time_ms_mean": 77.90843397378922,
+    "strategy": "ddp",
+    "tokenizer_fingerprint": "079742491f340195e985fea71c63cc7951ad8b6c70e182e576894ebb2caf6ddc",
+    "tokens_per_sec": 1899.6659597828873,
+    "tokens_seen": 296,
+    "updated_policy_fingerprint": "2440a479f1edd2aa7694afcf6c1195c5f8fe26dc7de89b4198122fd36ca34d20",
+    "world_size": 2,
+    "zero_variance_groups": 0
+  },
+  "updated_rollout": {
+    "prompt_group_count": 4,
+    "response_tokens": 292,
+    "decode_tokens_per_sec": 1581.833076282345,
+    "prefill_latency_ms": 374.66546427458525,
+    "decode_p50_ms": 18.130715005099773,
+    "decode_p95_ms": 53.315759589895585,
+    "cache_released": true
+  }
+}

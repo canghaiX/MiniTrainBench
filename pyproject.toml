@@ -18,6 +18,9 @@ test = [
 deepspeed = [
   "deepspeed==0.19.4",
 ]
+rl = [
+  "transformers>=4.57,<5",
+]
 
 [tool.ruff]
 line-length = 100

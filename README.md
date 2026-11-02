@@ -41,7 +41,7 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 | Megatron-LM | external compatibility smoke | `core_v0.18.2` 五组 8 卡 TP/PP/DP 已跑通；NGC repeat=3 性能待补 |
 | Memory pressure | 8 卡 benchmarked | 23.2M/168.5M/731.1M/2.60B 的 DDP/FSDP/ZeRO 成功与 OOM 证据 |
 | Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
-| RLHF/GRPO | not implemented | 当前聚焦 pretraining runtime / distributed infra |
+| Offline GRPO | implemented + CPU/Gloo tests | 可选 Transformers Llama actor/reference、离线 rollout 校验、DDP clipped policy update、KL 项、DCP checkpoint/resume；不是完整 RLHF 系统 |
 
 ## 面向训练基础设施的能力展示
 
@@ -51,6 +51,8 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 - 实现最小训练 Runtime：`TrainingConfig`、`TrainState`、`StepMetrics`、`Trainer`、
   deterministic synthetic data、distributed checkpoint/resume。
 - 使用可插拔 strategy 抽象隔离 DDP/FSDP 包装逻辑，并支持 checkpoint retention。
+- 可选 GRPO 实验路径：消费 InferKernelLab 生成的本地 Llama rollout，校验行为策略
+  logprob 与模型/tokenizer 指纹，执行 DDP actor/reference 更新并支持精确 checkpoint resume。
 - 提供 DDP/FSDP gradient accumulation 同步策略，并展示通信与显存取舍。
 - 保存每个 rank 的 RNG 状态，支持带 dropout 的精确 checkpoint/resume 校验。
 - 支持独立 repeat trial，报告 `mean ± std`，避免单次短跑被当成严谨性能结论。
@@ -701,9 +703,15 @@ README 不展示 TP/PP 性能数字，也不把 Megatron 标为 performance benc
 [Megatron smoke 报告](results/megatron_smoke/report.md) 和
 [锁定环境重跑复盘](docs/postmortem_locked_gpu_rerun.md)。
 
-没有实现完整 Megatron、多机或 RLHF 是主动控制范围：本项目优先证明 pretraining runtime
+没有实现完整 Megatron、多机或生产级 RLHF 系统是主动控制范围：本项目优先证明 pretraining runtime
 的通信、显存、恢复和性能诊断能力。生产级 PP schedule、跨节点 fabric 验证和训练后阶段
 需要独立的系统边界，不用未经验证的 toy 实现填充能力矩阵。
+
+可选离线 GRPO 实验是一个受限的训练后优化闭环，使用 token-prefix toy reward 和本地
+Llama checkpoint，不代表完整 RLHF infra 的生产实现。安装 `pip install -e '.[rl]'` 后，
+可运行 `scripts/run_grpo_cycle_smoke.sh` 完成 InferKernelLab rollout、DDP policy update
+与更新后重新 rollout。采样口径、损失、验证和限制见
+[`docs/grpo_rollout_design.md`](docs/grpo_rollout_design.md)。
 
 ## ZeRO 对比边界
 

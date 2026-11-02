@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 
 from .communication import communication_benchmark
 from .deepspeed_benchmark import deepspeed_benchmark
 from .doctor import run_doctor
 from .fault_tolerance import crash_worker, fault_tolerance_smoke
+from .grpo import add_grpo_parser, train_grpo
 from .moe_routing import moe_routing_benchmark
 from .profiler import profile_training
 from .report import write_report
@@ -14,12 +16,11 @@ from .tensor_parallel import (
     tensor_parallel_mlp_check,
     tensor_parallel_sequence_check,
 )
-from .tp_training import tp_dp_train
 from .tp_lm_training import tp_dp_lm_train, validate_lm_shape
+from .tp_training import tp_dp_train
 from .tp_transformer_training import (
     tp_dp_transformer_train,
     validate_transformer_shape,
-    validate_transformer_world_size,
 )
 from .training import train
 from .verification import verify_checkpoints
@@ -168,6 +169,10 @@ def build_parser() -> argparse.ArgumentParser:
     deepspeed_parser.add_argument("--warmup-steps", type=int, default=5)
     deepspeed_parser.add_argument("--repeat", type=int, default=1)
     deepspeed_parser.add_argument("--output", default=None)
+
+    rl_parser = subparsers.add_parser("rl", help="运行 RL 训练实验")
+    rl_subparsers = rl_parser.add_subparsers(dest="rl_command", required=True)
+    add_grpo_parser(rl_subparsers)
 
     comm_parser = subparsers.add_parser("comm", help="运行 collective 通信 benchmark")
     _add_common_distributed_arguments(comm_parser)
@@ -420,6 +425,30 @@ def main(argv: list[str] | None = None) -> None:
             deepspeed_benchmark(args)
         except ValueError as error:
             raise SystemExit(str(error)) from None
+    elif args.command == "rl" and args.rl_command == "grpo-train":
+        if (
+            args.steps < 1
+            or args.groups_per_step < 1
+            or args.learning_rate <= 0
+            or args.max_grad_norm <= 0
+            or not 0 < args.clip_epsilon < 1
+            or args.kl_coef < 0
+        ):
+            raise SystemExit(
+                "steps/groups-per-step、learning-rate、max-grad-norm 和 clip-epsilon 参数无效"
+            )
+        if args.save_every < 0 or args.keep_last < 0 or args.logprob_tolerance < 0:
+            raise SystemExit("save-every、keep-last 和 logprob-tolerance 不能为负数")
+        if args.resume and not args.checkpoint_dir:
+            raise SystemExit("--resume 必须与 --checkpoint-dir 一起使用")
+        if args.save_every and not args.checkpoint_dir:
+            raise SystemExit("--save-every 大于 0 时必须提供 --checkpoint-dir")
+        try:
+            result = train_grpo(args)
+        except (FileNotFoundError, FloatingPointError, RuntimeError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        if result is not None:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "comm":
         if args.iters < 1 or args.warmup < 0:
             raise SystemExit("iters 必须为正数，warmup 不能为负数")
