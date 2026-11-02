@@ -8,6 +8,7 @@ import platform
 import statistics
 import sys
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 from .checkpoint import CheckpointManager
 from .distributed import DistributedContext, setup_distributed
+from .gsm8k import GSM8K_SHA256, gsm8k_exact_match
 from .provenance import collect_provenance
 from .runtime import TrainState, _write_json
 from .scheduler import LearningRateScheduler
@@ -101,7 +103,7 @@ def _read_rollouts(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any
     source = Path(path)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     records = []
-    for line_number, line in enumerate(source.read_text().splitlines(), start=1):
+    for line_number, line in enumerate(source.read_text(encoding="utf-8").split("\n"), start=1):
         if not line.strip():
             continue
         try:
@@ -119,10 +121,11 @@ def _read_rollouts(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any
         item.get("type") != "prompt_group" for item in groups
     ):
         raise ValueError("unsupported or malformed rollout schema")
-    if manifest.get("reward_function") != "token_prefix_accuracy_v1":
+    reward_function = manifest.get("reward_function")
+    if reward_function not in {"token_prefix_accuracy_v1", "gsm8k_exact_match_v1"}:
         raise ValueError("unsupported rollout reward function")
-    if manifest.get("architecture") != "LlamaForCausalLM":
-        raise ValueError("only Llama rollouts are supported")
+    if manifest.get("architecture") not in {"LlamaForCausalLM", "Qwen3ForCausalLM"}:
+        raise ValueError("rollout architecture must be LlamaForCausalLM or Qwen3ForCausalLM")
     if manifest.get("logprob_convention") != "temperature_scaled_untruncated_policy":
         raise ValueError("unsupported rollout logprob convention")
     sampling = manifest.get("sampling", {})
@@ -199,26 +202,64 @@ def _read_rollouts(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any
                 len(response) != max_new_tokens or any(token in eos_ids for token in response)
             ):
                 raise ValueError(f"invalid length completion in group {group_id}")
-            prefix = 0
-            for actual, expected in zip(response, target):
-                if actual != expected:
-                    break
-                prefix += 1
-            if abs(reward - prefix / max(len(response), len(target))) > 1e-7:
-                raise ValueError(
-                    f"reward does not match token_prefix_accuracy_v1 in group {group_id}"
-                )
+            if reward_function == "gsm8k_exact_match_v1":
+                response_text = completion.get("response_text")
+                answer = group.get("answer", group.get("target_text"))
+                if not isinstance(response_text, str) or not isinstance(answer, str):
+                    raise ValueError(
+                        f"GSM8K completion {group_id} must include response_text and answer"
+                    )
+                expected_reward = gsm8k_exact_match(response_text, answer)
+                if abs(reward - expected_reward) > 1e-7:
+                    raise ValueError(
+                        f"reward does not match gsm8k_exact_match_v1 in group {group_id}"
+                    )
+            else:
+                prefix = 0
+                for actual, expected in zip(response, target):
+                    if actual != expected:
+                        break
+                    prefix += 1
+                if abs(reward - prefix / max(len(response), len(target))) > 1e-7:
+                    raise ValueError(
+                        f"reward does not match token_prefix_accuracy_v1 in group {group_id}"
+                    )
     return manifest, groups, digest
+
+
+def _validate_gsm8k_bindings(
+    groups: list[dict[str, Any]], rows: list[dict], tokenizer: Any
+) -> None:
+    """Bind rewards to the verified dataset and the actual generated token IDs."""
+    by_id = {str(row["id"]): row for row in rows}
+    if len(by_id) != len(rows) or {str(group["group_id"]) for group in groups} != set(by_id):
+        raise ValueError("GSM8K rollout groups do not match the prepared train split")
+    for group in groups:
+        row = by_id[str(group["group_id"])]
+        if group.get("answer") != row["answer"]:
+            raise ValueError("GSM8K answer does not match the prepared dataset")
+        prompt_text = group.get("prompt_text", "")
+        if (
+            row["question"] not in prompt_text
+            or tokenizer.encode(prompt_text, add_special_tokens=False) != group["prompt_tokens"]
+        ):
+            raise ValueError("GSM8K prompt text and token IDs do not match")
+        for completion in group["completions"]:
+            decoded = tokenizer.decode(completion["response_tokens"], skip_special_tokens=True)
+            if decoded != completion["response_text"]:
+                raise ValueError("GSM8K response text does not match generated token IDs")
+            if gsm8k_exact_match(decoded, row["answer"]) != completion["reward"]:
+                raise ValueError("GSM8K token-derived reward mismatch")
 
 
 def _load_transformers():
     try:
-        from transformers import AutoConfig, LlamaForCausalLM
+        from transformers import AutoConfig, AutoModelForCausalLM
     except ImportError as error:
         raise RuntimeError(
-            "GRPO Llama training requires the optional dependency: pip install 'minitrainbench[rl]'"
+            "GRPO training requires the optional dependency: pip install 'minitrainbench[rl]'"
         ) from error
-    return AutoConfig, LlamaForCausalLM
+    return AutoConfig, AutoModelForCausalLM
 
 
 def _precision_dtype(name: str, device: torch.device) -> torch.dtype:
@@ -392,8 +433,9 @@ def _verify_rollout_logprobs(
     dtype: torch.dtype,
     temperature: float,
     tolerance: float,
-) -> float:
-    max_error = torch.zeros((), device=context.device)
+) -> dict[str, Any]:
+    local_deltas = []
+    worst = {"abs_error": -1.0}
     with torch.no_grad():
         for group in groups:
             input_ids, mask, _, old_logprobs, _ = _prepare_batch([group], context.device)
@@ -402,24 +444,50 @@ def _verify_rollout_logprobs(
             ):
                 logits = reference(input_ids=input_ids, attention_mask=mask, use_cache=False).logits
             actual = _selected_logprobs(logits, input_ids, [group], temperature=temperature)
-            error = torch.stack(
-                [
-                    (new - old.to(context.device)).abs().max()
-                    for new, old in zip(actual, old_logprobs)
-                ]
-            ).max()
-            max_error = torch.maximum(max_error, error)
-    error_value = _reduce_scalar(max_error, context, op=dist.ReduceOp.MAX)
-    if not math.isfinite(error_value) or error_value > tolerance:
-        raise ValueError(
-            f"rollout/current-policy logprob mismatch: {error_value:.6g} > {tolerance:.6g}"
-        )
-    return error_value
+            for completion_index, (new, old) in enumerate(zip(actual, old_logprobs)):
+                delta = (new - old.to(context.device)).float().cpu()
+                local_deltas.append(delta)
+                position = int(delta.abs().argmax())
+                if float(delta[position].abs()) > worst["abs_error"]:
+                    worst = {
+                        "abs_error": float(delta[position].abs()),
+                        "group_id": group.get("group_id", "unknown"),
+                        "completion": completion_index,
+                        "response_position": position,
+                        "current_logprob": float(new[position]),
+                        "old_logprob": float(old[position]),
+                    }
+    payload = {"deltas": torch.cat(local_deltas), "worst": worst}
+    parts = [None] * context.world_size
+    if context.world_size > 1:
+        dist.all_gather_object(parts, payload)
+    else:
+        parts[0] = payload
+    deltas = torch.cat([part["deltas"] for part in parts])
+    errors = deltas.abs()
+    finite = bool(torch.isfinite(errors).all())
+    max_error = float(errors.max()) if finite else None
+    ratios = deltas.exp()
+    return {
+        "passed": finite and max_error <= tolerance,
+        "tolerance": tolerance,
+        "token_count": errors.numel(),
+        "max_abs_error": max_error,
+        "mean_abs_error": float(errors.mean()) if finite else None,
+        "p99_abs_error": float(torch.quantile(errors, 0.99)) if finite else None,
+        "baseline_ratio_outside_0_8_1_2_fraction": float(
+            ((ratios < 0.8) | (ratios > 1.2)).float().mean()
+        ),
+        "worst": max((part["worst"] for part in parts), key=lambda item: item["abs_error"]),
+    }
 
 
 def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
     if args.steps <= 0 or args.groups_per_step <= 0:
         raise ValueError("steps and groups-per-step must be positive")
+    microbatch_groups = getattr(args, "microbatch_groups", 0) or args.groups_per_step
+    if microbatch_groups <= 0:
+        raise ValueError("microbatch-groups must be nonnegative")
     if args.learning_rate <= 0 or args.max_grad_norm <= 0:
         raise ValueError("learning-rate and max-grad-norm must be positive")
     if not 0 < args.clip_epsilon < 1 or args.kl_coef < 0:
@@ -451,6 +519,44 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
     )
     if manifest.get("tokenizer_fingerprint") != expected_tokenizer:
         raise ValueError("rollout tokenizer fingerprint does not match the local tokenizer")
+    if manifest.get("engine") == "sglang":
+        server = manifest.get("sglang_server", {})
+        server_digest = hashlib.sha256(json.dumps(server, sort_keys=True).encode()).hexdigest()
+        if server.get("version") != "0.5.18" or server_digest != manifest.get(
+            "sglang_server_fingerprint"
+        ):
+            raise ValueError("invalid SGLang version or server fingerprint")
+        if manifest["sampling"]["top_p"] != 1.0:
+            raise ValueError("SGLang GRPO requires top_p=1 for an untruncated policy")
+        if manifest.get("reward_function") == "gsm8k_exact_match_v1":
+            data_path = Path(manifest.get("data_manifest", ""))
+            prompt_path = Path(manifest.get("prompt_file", ""))
+            if not data_path.is_file() or hashlib.sha256(
+                data_path.read_bytes()
+            ).hexdigest() != manifest.get("data_fingerprint"):
+                raise ValueError("GSM8K data manifest fingerprint mismatch")
+            metadata = json.loads(data_path.read_text())
+            if (
+                metadata != manifest.get("data_metadata")
+                or metadata.get("dataset") != "openai/gsm8k"
+                or metadata.get("source_sha256") != GSM8K_SHA256
+            ):
+                raise ValueError("GSM8K data metadata mismatch")
+            if not prompt_path.is_file() or hashlib.sha256(
+                prompt_path.read_bytes()
+            ).hexdigest() != manifest.get("prompt_file_sha256"):
+                raise ValueError("GSM8K prompt file fingerprint mismatch")
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                args.tokenizer_path or args.model_path, local_files_only=True
+            )
+            prompt_rows = [
+                json.loads(line)
+                for line in prompt_path.read_text(encoding="utf-8").split("\n")
+                if line.strip()
+            ]
+            _validate_gsm8k_bindings(groups, prompt_rows, tokenizer)
     if int(manifest.get("generation", {}).get("num_generations", 0)) < 2:
         raise ValueError("GRPO requires at least two responses per prompt")
 
@@ -477,9 +583,18 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
         dtype = _precision_dtype(args.precision, context.device)
         config_class, model_class = _load_transformers()
         model_config = config_class.from_pretrained(args.model_path, local_files_only=True)
-        if model_config.model_type != "llama":
-            raise ValueError("GRPO currently supports local Llama checkpoints only")
-        model_config._attn_implementation = "eager"
+        if model_config.model_type not in {"llama", "qwen3"}:
+            raise ValueError("GRPO currently supports local Llama and Qwen3 checkpoints only")
+        if manifest.get("model_type") not in {None, model_config.model_type}:
+            raise ValueError("rollout model_type does not match --model-path")
+        expected_architecture = {
+            "llama": "LlamaForCausalLM",
+            "qwen3": "Qwen3ForCausalLM",
+        }[model_config.model_type]
+        if manifest.get("architecture") != expected_architecture:
+            raise ValueError("rollout architecture does not match --model-path")
+        attention_implementation = getattr(args, "attention_implementation", "eager")
+        model_config._attn_implementation = attention_implementation
         actor = model_class.from_pretrained(
             args.model_path,
             config=model_config,
@@ -487,7 +602,7 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             dtype=torch.float32,
         ).to(context.device)
         reference_config = config_class.from_pretrained(args.model_path, local_files_only=True)
-        reference_config._attn_implementation = "eager"
+        reference_config._attn_implementation = attention_implementation
         reference = model_class.from_pretrained(
             args.model_path,
             config=reference_config,
@@ -527,6 +642,17 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
                 "clip_epsilon": args.clip_epsilon,
                 "kl_coef": args.kl_coef,
                 "groups_per_step": args.groups_per_step,
+                # Keep the legacy fingerprint for unchanged default execution.
+                **(
+                    {"microbatch_groups": microbatch_groups}
+                    if microbatch_groups != args.groups_per_step
+                    else {}
+                ),
+                **(
+                    {"attention_implementation": attention_implementation}
+                    if attention_implementation != "eager"
+                    else {}
+                ),
                 "sampling": manifest["sampling"],
                 "seed": args.seed,
                 "max_grad_norm": args.max_grad_norm,
@@ -534,14 +660,57 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
         )
         sampling = manifest["sampling"]
         temperature = float(sampling["temperature"])
-        initial_logprob_error = _verify_rollout_logprobs(
+        default_logprob_tolerance = (
+            0.5
+            if model_config.model_type == "qwen3" and dtype == torch.bfloat16
+            else (5e-2 if dtype == torch.bfloat16 else 2e-3)
+        )
+        logprob_probe = _verify_rollout_logprobs(
             reference,
             local_groups,
             context,
             dtype,
             temperature,
-            args.logprob_tolerance or (5e-2 if dtype == torch.bfloat16 else 2e-3),
+            args.logprob_tolerance or default_logprob_tolerance,
         )
+        initial_logprob_error = logprob_probe["max_abs_error"]
+        if not logprob_probe["passed"] or getattr(args, "preflight_only", False):
+            preflight_result = {
+                "schema_version": 1,
+                "benchmark": "grpo_preflight",
+                "status": "ok" if logprob_probe["passed"] else "failed",
+                "stage": "policy_logprob_preflight",
+                "command": sys.argv,
+                "world_size": context.world_size,
+                "precision": args.precision,
+                "attention_implementation": attention_implementation,
+                "initial_policy_fingerprint": expected_model,
+                "tokenizer_fingerprint": expected_tokenizer,
+                "rollout_sha256": rollout_digest,
+                "data_fingerprint": manifest.get("data_fingerprint"),
+                "sglang_server": manifest.get("sglang_server"),
+                "logprob_probe": logprob_probe,
+                "optimizer_updated": False,
+                "source_sha256": _fingerprint_files(
+                    Path(__file__).resolve().parents[1], lambda path: path.suffix == ".py"
+                ),
+                "environment": {
+                    "python": platform.python_version(),
+                    "torch": torch.__version__,
+                    "cuda": torch.version.cuda,
+                    "gpu": torch.cuda.get_device_name(context.device)
+                    if context.device.type == "cuda"
+                    else None,
+                },
+                "provenance": collect_provenance(),
+            }
+            if context.is_main:
+                _write_json(args.output, preflight_result)
+            if not logprob_probe["passed"]:
+                raise ValueError(
+                    f"rollout/current-policy logprob mismatch: {initial_logprob_error} > {logprob_probe['tolerance']}"
+                )
+            return preflight_result if context.is_main else None
         checkpoint_manager = CheckpointManager(args.checkpoint_dir, context)
         state = TrainState(seed=args.seed, config_fingerprint=config.fingerprint())
         resumed = False
@@ -587,60 +756,84 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
                 local_groups[(start_index + offset) % len(local_groups)]
                 for offset in range(args.groups_per_step)
             ]
-            input_ids, attention_mask, group_indices, old_logprobs, rewards = _prepare_batch(
-                selected_groups, context.device
-            )
-            advantages, zero_variance = _group_advantages(selected_groups, context.device)
+            _, zero_variance = _group_advantages(selected_groups, context.device)
             zero_variance_total += int(
                 _reduce_scalar(torch.tensor(zero_variance, device=context.device), context)
                 * context.world_size
             )
             optimizer.zero_grad(set_to_none=True)
             autocast_enabled = dtype != torch.float32
-            with torch.autocast(
-                device_type=context.device.type,
-                dtype=dtype,
-                enabled=autocast_enabled,
-            ):
-                actor_outputs = actor(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    use_cache=False,
-                    return_dict=True,
+            loss_value = torch.zeros((), device=context.device)
+            metric_values = {
+                "kl": torch.zeros((), device=context.device),
+                "clip_fraction": torch.zeros((), device=context.device),
+            }
+            for micro_start in range(0, len(selected_groups), microbatch_groups):
+                micro_groups = selected_groups[micro_start : micro_start + microbatch_groups]
+                input_ids, attention_mask, group_indices, old_logprobs, _ = _prepare_batch(
+                    micro_groups, context.device
                 )
-                new_logprobs = _selected_logprobs(
-                    actor_outputs.logits,
-                    input_ids,
-                    selected_groups,
-                    temperature=temperature,
+                advantages, _ = _group_advantages(micro_groups, context.device)
+                weight = len(micro_groups) / len(selected_groups)
+                last_microbatch = micro_start + microbatch_groups >= len(selected_groups)
+                sync_context = (
+                    actor.no_sync()
+                    if isinstance(actor, DistributedDataParallel) and not last_microbatch
+                    else nullcontext()
                 )
-                with torch.no_grad():
-                    reference_outputs = reference(
+                with (
+                    sync_context,
+                    torch.autocast(
+                        device_type=context.device.type,
+                        dtype=dtype,
+                        enabled=autocast_enabled,
+                    ),
+                ):
+                    actor_outputs = actor(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         use_cache=False,
                         return_dict=True,
                     )
-                    reference_logprobs = _selected_logprobs(
-                        reference_outputs.logits,
+                    new_logprobs = _selected_logprobs(
+                        actor_outputs.logits,
                         input_ids,
-                        selected_groups,
+                        micro_groups,
                         temperature=temperature,
                     )
-                loss, metrics = _grpo_objective(
-                    new_logprobs,
-                    reference_logprobs,
-                    old_logprobs,
-                    advantages,
-                    group_indices,
-                    clip_epsilon=args.clip_epsilon,
-                    kl_coef=args.kl_coef,
-                    group_count=len(selected_groups),
-                )
-            finite_loss = _reduce_scalar(torch.isfinite(loss).int(), context, op=dist.ReduceOp.MIN)
-            if not finite_loss:
-                raise FloatingPointError(f"non-finite GRPO loss at step {step}")
-            loss.backward()
+                    with torch.no_grad():
+                        reference_outputs = reference(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            use_cache=False,
+                            return_dict=True,
+                        )
+                        reference_logprobs = _selected_logprobs(
+                            reference_outputs.logits,
+                            input_ids,
+                            micro_groups,
+                            temperature=temperature,
+                        )
+                    loss, metrics = _grpo_objective(
+                        new_logprobs,
+                        reference_logprobs,
+                        old_logprobs,
+                        advantages,
+                        group_indices,
+                        clip_epsilon=args.clip_epsilon,
+                        kl_coef=args.kl_coef,
+                        group_count=len(micro_groups),
+                    )
+                    finite_loss = _reduce_scalar(
+                        torch.isfinite(loss).int(), context, op=dist.ReduceOp.MIN
+                    )
+                    if not finite_loss:
+                        raise FloatingPointError(f"non-finite GRPO loss at step {step}")
+                    (loss * weight).backward()
+                    loss_value += loss.detach() * weight
+                    for name in metric_values:
+                        metric_values[name] += metrics[name].detach() * weight
+                    del actor_outputs, reference_outputs, new_logprobs, reference_logprobs, loss
             grad_norm = strategy.clip_grad_norm(actor, args.max_grad_norm)
             finite = torch.tensor(
                 int(torch.isfinite(grad_norm).item()), dtype=torch.int32, device=context.device
@@ -654,7 +847,14 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             scheduler.step()
             token_count = int(
                 _reduce_scalar(
-                    torch.tensor(sum(len(item) for item in old_logprobs), device=context.device),
+                    torch.tensor(
+                        sum(
+                            len(item["response_tokens"])
+                            for group in selected_groups
+                            for item in group["completions"]
+                        ),
+                        device=context.device,
+                    ),
                     context,
                 )
                 * context.world_size
@@ -662,12 +862,20 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             response_tokens_seen += token_count
             state.global_step += 1
             state.tokens_seen += token_count
-            loss_history.append(_reduce_scalar(loss.detach(), context))
-            kl_history.append(_reduce_scalar(metrics["kl"], context))
-            clip_history.append(_reduce_scalar(metrics["clip_fraction"], context))
+            loss_history.append(_reduce_scalar(loss_value, context))
+            kl_history.append(_reduce_scalar(metric_values["kl"], context))
+            clip_history.append(_reduce_scalar(metric_values["clip_fraction"], context))
             reward_history.append(
                 _reduce_scalar(
-                    torch.tensor(statistics.fmean(rewards), device=context.device), context
+                    torch.tensor(
+                        statistics.fmean(
+                            item["reward"]
+                            for group in selected_groups
+                            for item in group["completions"]
+                        ),
+                        device=context.device,
+                    ),
+                    context,
                 )
             )
             grad_norm_history.append(_reduce_scalar(grad_norm, context, op=dist.ReduceOp.MAX))
@@ -732,6 +940,7 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             "world_size": context.world_size,
             "strategy": "ddp",
             "precision": args.precision,
+            "attention_implementation": attention_implementation,
             "global_step": state.global_step,
             "prompt_groups": len(groups),
             "responses_per_group": int(manifest["generation"]["num_generations"]),
@@ -739,7 +948,11 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             "updated_policy_fingerprint": model_fingerprint(output_model_path),
             "tokenizer_fingerprint": expected_tokenizer,
             "rollout_sha256": rollout_digest,
+            "data_fingerprint": manifest.get("data_fingerprint"),
+            "sglang_server": manifest.get("sglang_server"),
             "initial_logprob_max_error": initial_logprob_error,
+            "logprob_probe": logprob_probe,
+            "logprob_tolerance": args.logprob_tolerance or default_logprob_tolerance,
             "loss_mean": statistics.fmean(loss_history),
             "sampled_kl_mean": statistics.fmean(kl_history),
             "clip_fraction_mean": statistics.fmean(clip_history),
@@ -787,7 +1000,7 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
 
 
 def add_grpo_parser(subparsers) -> None:
-    parser = subparsers.add_parser("grpo-train", help="训练本地 Llama GRPO rollout")
+    parser = subparsers.add_parser("grpo-train", help="训练本地 Llama/Qwen3 GRPO rollout")
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--tokenizer-path", default=None)
     parser.add_argument("--rollouts", required=True)
@@ -798,11 +1011,23 @@ def add_grpo_parser(subparsers) -> None:
     parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--groups-per-step", type=int, default=1)
+    parser.add_argument("--attention-implementation", choices=("eager", "sdpa"), default="eager")
+    parser.add_argument(
+        "--microbatch-groups",
+        type=int,
+        default=0,
+        help="groups per forward/backward; 0 uses groups-per-step",
+    )
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--clip-epsilon", type=float, default=0.2)
     parser.add_argument("--kl-coef", type=float, default=0.01)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--logprob-tolerance", type=float, default=0.0)
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="validate every rollout token without updating parameters",
+    )
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--checkpoint-dir", default=None)
     parser.add_argument("--save-every", type=int, default=0)

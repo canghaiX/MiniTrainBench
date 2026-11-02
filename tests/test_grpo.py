@@ -17,9 +17,45 @@ from minitrainbench.grpo import (
     _prepare_batch,
     _read_rollouts,
     _selected_logprobs,
+    _validate_gsm8k_bindings,
     model_fingerprint,
     train_grpo,
 )
+from minitrainbench.gsm8k import gsm8k_exact_match
+
+
+def test_gsm8k_reward_is_bound_to_dataset_and_generated_ids():
+    class Tokenizer:
+        def encode(self, text, **kwargs):
+            return [ord(char) for char in text]
+
+        def decode(self, tokens, **kwargs):
+            return "".join(chr(token) for token in tokens)
+
+    tokenizer = Tokenizer()
+    rows = [{"id": "train-1", "question": "2+2?", "answer": "#### 4"}]
+    groups = [
+        {
+            "group_id": "train-1",
+            "answer": "#### 4",
+            "prompt_text": "2+2?",
+            "prompt_tokens": tokenizer.encode("2+2?"),
+            "completions": [
+                {
+                    "response_tokens": tokenizer.encode("#### 4"),
+                    "response_text": "#### 4",
+                    "reward": 1.0,
+                }
+            ],
+        }
+    ]
+    _validate_gsm8k_bindings(groups, rows, tokenizer)
+    groups[0]["completions"][0]["response_text"] = "#### 5"
+    with pytest.raises(ValueError, match="generated token IDs"):
+        _validate_gsm8k_bindings(groups, rows, tokenizer)
+    groups[0]["answer"] = "#### 5"
+    with pytest.raises(ValueError, match="prepared dataset"):
+        _validate_gsm8k_bindings(groups, rows, tokenizer)
 
 
 def _groups():
@@ -54,6 +90,131 @@ def test_group_advantages_and_zero_variance():
     advantages, count = _group_advantages(groups, torch.device("cpu"))
     assert advantages == [1.0, -1.0, 0.0, 0.0]
     assert count == 1
+
+
+def test_gsm8k_reward_is_numeric_exact_match():
+    assert gsm8k_exact_match("2 * 9 = 18\n#### 18", "#### 18") == 1.0
+    assert gsm8k_exact_match("#### 19", "#### 18") == 0.0
+
+
+def test_qwen3_tiny_gsm8k_artifact_trains_one_step(tmp_path):
+    transformers = pytest.importorskip("transformers")
+    torch.manual_seed(7)
+    config = transformers.Qwen3Config(
+        vocab_size=64,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=32,
+        eos_token_id=63,
+        attention_dropout=0.0,
+    )
+    config._attn_implementation = "eager"
+    model = transformers.Qwen3ForCausalLM(config).eval()
+    model_path = tmp_path / "qwen3"
+    model.save_pretrained(model_path)
+    groups = []
+    for index, prompt in enumerate(([1, 4], [2, 6])):
+        group = {
+            "type": "prompt_group",
+            "group_id": str(index),
+            "task": "gsm8k",
+            "prompt_tokens": list(prompt),
+            "target_tokens": [3],
+            "target_text": "#### 4",
+            "answer": "#### 4",
+            "completions": [
+                {
+                    "response_tokens": [3, 5],
+                    "response_text": "#### 4",
+                    "old_logprobs": [],
+                    "reward": 1.0,
+                    "finish_reason": "length",
+                },
+                {
+                    "response_tokens": [6, 7],
+                    "response_text": "#### 3",
+                    "old_logprobs": [],
+                    "reward": 0.0,
+                    "finish_reason": "length",
+                },
+            ],
+        }
+        groups.append(group)
+    inputs, mask, _, _, _ = _prepare_batch(groups, torch.device("cpu"))
+    with torch.no_grad():
+        logprobs = iter(
+            _selected_logprobs(
+                model(input_ids=inputs, attention_mask=mask).logits, inputs, groups, temperature=0.8
+            )
+        )
+    for group in groups:
+        for completion in group["completions"]:
+            completion["old_logprobs"] = next(logprobs).tolist()
+    manifest = {
+        "type": "manifest",
+        "schema_version": 1,
+        "architecture": "Qwen3ForCausalLM",
+        "model_type": "qwen3",
+        "logprob_convention": "temperature_scaled_untruncated_policy",
+        "model_fingerprint": model_fingerprint(model_path),
+        "tokenizer_fingerprint": hashlib.sha256(b"token_ids:vocab=64").hexdigest(),
+        "tokenizer_mode": "token_ids",
+        "vocab_size": 64,
+        "sampling": {"temperature": 0.8, "top_p": 1.0, "seed": 7},
+        "generation": {"num_generations": 2, "max_new_tokens": 2, "eos_token_ids": [63]},
+        "reward_function": "gsm8k_exact_match_v1",
+        "prompt_group_count": 2,
+    }
+    rollout = tmp_path / "qwen-rollout.jsonl"
+    rollout.write_text("\n".join(json.dumps(row) for row in [manifest, *groups]) + "\n")
+    args = build_parser().parse_args(
+        [
+            "rl",
+            "grpo-train",
+            "--model-path",
+            str(model_path),
+            "--rollouts",
+            str(rollout),
+            "--output-model",
+            str(tmp_path / "updated"),
+            "--output",
+            str(tmp_path / "result.json"),
+            "--device",
+            "cpu",
+            "--backend",
+            "gloo",
+            "--precision",
+            "fp32",
+            "--steps",
+            "1",
+            "--groups-per-step",
+            "1",
+            "--learning-rate",
+            "0.001",
+        ]
+    )
+    args.attention_implementation = "sdpa"
+    result = train_grpo(args)
+    assert result["optimizer_updated"]
+    # Qwen3 uses the same DCP contract, including group accumulation and RNG state.
+    args.checkpoint_dir = str(tmp_path / "qwen-checkpoints")
+    args.save_every = 1
+    args.groups_per_step = 2
+    args.microbatch_groups = 1
+    args.output_model = str(tmp_path / "first-qwen")
+    train_grpo(args)
+    args.resume = "latest"
+    args.steps = 2
+    args.output_model = str(tmp_path / "resumed-qwen")
+    resumed = train_grpo(args)
+    args.resume = None
+    args.checkpoint_dir = str(tmp_path / "continuous-checkpoints")
+    args.output_model = str(tmp_path / "continuous-qwen")
+    continuous = train_grpo(args)
+    assert resumed["policy_state_sha256"] == continuous["policy_state_sha256"]
 
 
 def test_grpo_clipping_kl_and_sequence_weighting():
@@ -217,6 +378,49 @@ def test_grpo_rejects_policy_fingerprint_mismatch(artifact, tmp_path):
     config_path.write_text(config_path.read_text() + "\n")
     with pytest.raises(ValueError, match="policy fingerprint"):
         train_grpo(args)
+
+
+def test_failed_preflight_writes_diagnostics_without_updating(artifact, tmp_path):
+    records = [json.loads(line) for line in artifact[1].read_text().split("\n") if line]
+    records[1]["completions"][0]["old_logprobs"][0] -= 1.0
+    artifact[1].write_text("\n".join(json.dumps(row) for row in records) + "\n")
+    args = build_parser().parse_args(_arguments(artifact, tmp_path, "failed"))
+    with pytest.raises(ValueError, match="logprob mismatch"):
+        train_grpo(args)
+    report = json.loads(Path(args.output).read_text())
+    assert report["status"] == "failed"
+    assert report["logprob_probe"]["max_abs_error"] > 0.99
+    assert not report["optimizer_updated"]
+    assert not Path(args.output_model).exists()
+
+
+def test_preflight_only_preserves_the_policy(artifact, tmp_path):
+    args = build_parser().parse_args(_arguments(artifact, tmp_path, "probe"))
+    args.preflight_only = True
+    result = train_grpo(args)
+    assert result["status"] == "ok"
+    assert result["logprob_probe"]["passed"]
+    assert not result["optimizer_updated"]
+    assert not Path(args.output_model).exists()
+
+
+def test_group_microbatch_update_matches_full_batch(artifact, tmp_path):
+    transformers = pytest.importorskip("transformers")
+    args = build_parser().parse_args(_arguments(artifact, tmp_path, "full"))
+    args.groups_per_step = 2
+    train_grpo(args)
+    args.microbatch_groups = 1
+    args.output_model = str(tmp_path / "micro")
+    args.checkpoint_dir = str(tmp_path / "micro-checkpoints")
+    train_grpo(args)
+    full = transformers.AutoModelForCausalLM.from_pretrained(
+        tmp_path / "full", local_files_only=True
+    )
+    micro = transformers.AutoModelForCausalLM.from_pretrained(
+        tmp_path / "micro", local_files_only=True
+    )
+    for expected, actual in zip(full.parameters(), micro.parameters()):
+        torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-5)
 
 
 def test_grpo_two_process_gloo_and_resume(artifact, tmp_path):

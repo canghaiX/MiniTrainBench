@@ -1,8 +1,8 @@
 # Offline GRPO Rollout and Update
 
-This optional path demonstrates one auditable post-training update using a local Llama model.
+This optional path demonstrates one auditable post-training update using a local Llama or Qwen3 model.
 InferKernelLab samples several completions per prompt and writes a JSONL artifact. MiniTrainBench
-validates schema, token ranges, finish metadata, deterministic toy reward, model/tokenizer
+validates schema, token ranges, finish metadata, recorded reward, model/tokenizer
 fingerprints, and the initial actor logprobs before training. The policy and frozen reference
 start from the same local checkpoint; DDP averages actor gradients across ranks. Prompt groups
 are sharded by rank and the number of groups must divide evenly across ranks.
@@ -28,7 +28,9 @@ Output is a regular Hugging Face model directory usable for another local rollou
 summary reports whether weights changed and whether all DDP ranks ended with identical weights;
 it does not claim reward improvement.
 
-This is intentionally not a full RLHF system: reward is token-prefix accuracy, the reference is
-frozen locally, and there is no learned reward model, critic, asynchronous generation, SGLang
-integration, TP/FSDP actor, or production data pipeline. The experiment is useful for exercising
+This is intentionally not a full RLHF system: rewards are token-prefix accuracy or GSM8K numeric
+exact match, the reference is frozen locally, and there is no learned reward model, critic,
+asynchronous generation, TP/FSDP actor, or production data pipeline. The optional SGLang path is
+described in [qwen3_gsm8k_grpo_design.md](qwen3_gsm8k_grpo_design.md); its full Qwen3 BF16
+preflight currently fails the acceptance gate. The experiment exercises
 the rollout-to-training artifact boundary and distributed update/resume mechanics.
