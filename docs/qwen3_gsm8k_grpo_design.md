@@ -64,6 +64,14 @@ out-of-tolerance values write a structured failed report and stop training.
 `--preflight-only` runs the same check without an optimizer update or export.
 The tolerance has not been increased to turn a failed full run into a pass.
 
+Use InferKernelLab's `scripts/compare_grpo_logprobs.py` with the rollout and
+failed preflight JSON to compare generation logprobs, SGLang teacher-forced
+candidate scores and HF scores on identical token prefixes. The current
+diagnostic shows exact agreement between stored generation and SGLang scores
+for checked positions, with residual SGLang/HF forward differences above the
+gate on rare tokens. See
+[`gsm8k_logprob_alignment_diagnostic.json`](gsm8k_logprob_alignment_diagnostic.json).
+
 Successful runs verify rank parameter digests, export a local HF checkpoint,
 and support DCP resume. Evaluation restarts SGLang with each exported model;
 the summarizer requires matching seeds, model fingerprints, dataset, tokenizer,

@@ -718,6 +718,8 @@ policy update 和更新后评测。当前 Qwen3 全量 BF16 预检尚未通过�
 [`docs/grpo_rollout_design.md`](docs/grpo_rollout_design.md)。
 Qwen3/SGLang 数据流和 BF16 logprob 兼容性说明见
 [`docs/qwen3_gsm8k_grpo_design.md`](docs/qwen3_gsm8k_grpo_design.md)。
+固定 token 的 SGLang/HF logprob 诊断结果见
+[`docs/gsm8k_logprob_alignment_diagnostic.json`](docs/gsm8k_logprob_alignment_diagnostic.json)。
 
 ## ZeRO 对比边界
 
