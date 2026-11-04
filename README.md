@@ -41,7 +41,7 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 | Megatron-LM | external compatibility smoke | `core_v0.18.2` 五组 8 卡 TP/PP/DP 已跑通；NGC repeat=3 性能待补 |
 | Memory pressure | 8 卡 benchmarked | 23.2M/168.5M/731.1M/2.60B 的 DDP/FSDP/ZeRO 成功与 OOM 证据 |
 | Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
-| Offline GRPO | Llama 已验证；Qwen3/GSM8K 实验中 | SGLang token-ID rollout、GSM8K reward、DDP actor/reference、DCP resume；Qwen3 全量 BF16 logprob 门槛尚未通过，未宣称训练收益 |
+| Offline GRPO | Llama 已验证；Qwen3 HF reference 单 seed 闭环进行中 | 同一 HF incremental-cache rollout/scorer、GSM8K reward、双卡 DDP 更新和 DCP resume smoke；完整单 seed gate/评测结果以实验摘要为准 |
 
 ## 面向训练基础设施的能力展示
 
@@ -51,9 +51,9 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 - 实现最小训练 Runtime：`TrainingConfig`、`TrainState`、`StepMetrics`、`Trainer`、
   deterministic synthetic data、distributed checkpoint/resume。
 - 使用可插拔 strategy 抽象隔离 DDP/FSDP 包装逻辑，并支持 checkpoint retention。
-- 可选 GRPO 实验路径：消费 InferKernelLab 生成的本地 Llama 或 Qwen3/SGLang rollout，校验
-  行为策略 logprob、reward 与模型/tokenizer/data 指纹，执行 DDP actor/reference 更新并支持
-  精确 checkpoint resume。
+- 可选 GRPO 实验路径：消费本地 Llama、Qwen3/SGLang 或 Qwen3/HF incremental-cache rollout；
+  HF reference artifact 将生成、preflight 和可训练 actor logprob 绑定到同一单条 KV-cache
+  前向，并校验运行时、模型/tokenizer/data 指纹；支持 DDP actor/reference 和 DCP resume。
 - 提供 DDP/FSDP gradient accumulation 同步策略，并展示通信与显存取舍。
 - 保存每个 rank 的 RNG 状态，支持带 dropout 的精确 checkpoint/resume 校验。
 - 支持独立 repeat trial，报告 `mean ± std`，避免单次短跑被当成严谨性能结论。
@@ -89,6 +89,16 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 - 自动生成包含扩展效率、显存节省、repeat 统计和 Runtime 状态的 Markdown 报告。
 
 简历描述示例：
+
+可直接取用的两项目描述、量化证据及适用边界见
+[简历项目素材](docs/resume_project_summary.md)。
+
+<!-- grpo-single-seed-result:start -->
+RL Infra 验收进度：统一 Qwen3-0.6B 的 HF 增量采样与训练概率口径，全量
+419,959-token logprob gate 最大误差为 0；双 A100 BF16/DDP 更新及 DCP 恢复
+smoke 通过。seed 2026 的正式 16 步训练正在运行，完整 test EM 尚待评测。
+状态和复现命令见 [单 seed 运行记录](docs/gsm8k_single_seed_run.md)。
+<!-- grpo-single-seed-result:end -->
 
 > 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP/DeepSpeed
 > ZeRO 在 1/2/4/8 卡下的吞吐、step time、显存和 NCCL collective 行为，补充
@@ -708,18 +718,24 @@ README 不展示 TP/PP 性能数字，也不把 Megatron 标为 performance benc
 的通信、显存、恢复和性能诊断能力。生产级 PP schedule、跨节点 fabric 验证和训练后阶段
 需要独立的系统边界，不用未经验证的 toy 实现填充能力矩阵。
 
-可选离线 GRPO 实验是一个受限的训练后优化闭环，支持本地 Llama token-prefix reward 和
-Qwen3 + SGLang GSM8K exact-match reward，不代表完整 RLHF infra 的生产实现。安装
-`pip install -e '.[rl]'` 后，先运行 `scripts/prepare_gsm8k.py`，再运行
-`scripts/run_gsm8k_grpo_cycle.sh` 依次执行固定 256 题 rollout、logprob 预检、双卡 DDP
-policy update 和更新后评测。当前 Qwen3 全量 BF16 预检尚未通过，脚本会在更新前停止，
-不能将短 smoke 或初始模型准确率当成训练提升。实测结果见
-[`docs/gsm8k_grpo_validation.md`](docs/gsm8k_grpo_validation.md)。采样口径、损失和限制见
+可选离线 GRPO 实验是一个受限的训练后优化闭环，不代表完整 RLHF infra 的生产实现。
+SGLang rollout 保留为独立 serving 对照；`hf_reference` 是低吞吐的 Qwen3 correctness
+基线，生成与训练都使用 HF 单条 incremental KV-cache 前向。安装 `pip install -e '.[rl]'`
+后，运行 `scripts/run_gsm8k_hf_reference_cycle.sh`：先执行小样本 smoke，再生成固定 seed
+2026 的 256 题 rollout；全量 BF16 logprob gate 通过后才运行 16 步双卡 DDP 更新和完整
+test 评测。门槛为 `max_abs_logprob_error <= 0.5`，任一阶段失败即停止。A100 8 题 × 8
+completions smoke 已覆盖 11,332 个 token，preflight max error=0；完成一步更新和 step-2
+DCP 恢复，参数变化且 rank 一致。本轮单 seed 的已验证证据、当前验收状态与复现命令见
+[`docs/gsm8k_single_seed_run.md`](docs/gsm8k_single_seed_run.md)。采样口径、损失和限制见
 [`docs/grpo_rollout_design.md`](docs/grpo_rollout_design.md)。
 Qwen3/SGLang 数据流和 BF16 logprob 兼容性说明见
 [`docs/qwen3_gsm8k_grpo_design.md`](docs/qwen3_gsm8k_grpo_design.md)。
 固定 token 的 SGLang/HF logprob 诊断结果见
 [`docs/gsm8k_logprob_alignment_diagnostic.json`](docs/gsm8k_logprob_alignment_diagnostic.json)。
+同一 FA3 server 的 SGLang/HF worst-case 重测仍未通过 0.5 门槛；该历史 SGLang artifact
+与新的 HF reference 行为策略分开评估。单 seed 结果不代表多 seed 稳定性，也不预设 EM 提升。
+逐层 hook 对照显示三个样本的首个明显 block 分叉分别在第 15、17、7 层，
+见 InferKernelLab 的 `docs/benchmark_results/qwen3_layerwise_logprob_diagnostic.json`。
 
 ## ZeRO 对比边界
 

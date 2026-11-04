@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "recorded_date": "2026-11-04",
+  "timezone": "Asia/Shanghai",
+  "experiment_status": "training_in_progress_evaluation_pending",
+  "seed": 2026,
+  "training_prompt_groups": 256,
+  "completions_per_group": 8,
+  "formal_training_target_steps": 16,
+  "formal_training_completed_and_validated": false,
+  "complete_test_evaluations": null,
+  "em_improvement_claimed": false,
+  "full_rollout_preflight": {
+    "status": "ok",
+    "stage": "policy_logprob_preflight",
+    "optimizer_updated": false,
+    "logprob_probe": {
+      "baseline_ratio_outside_0_8_1_2_fraction": 0.0,
+      "max_abs_error": 0.0,
+      "mean_abs_error": 0.0,
+      "p99_abs_error": 0.0,
+      "passed": true,
+      "token_count": 419959,
+      "tolerance": 0.5,
+      "worst": {
+        "abs_error": 0.0,
+        "completion": 0,
+        "current_logprob": -0.22474081814289093,
+        "group_id": "train-1",
+        "old_logprob": -0.22474081814289093,
+        "response_position": 0
+      }
+    },
+    "rollout_sha256": "e4716033b3b16ee45fc0ef905ee726f037fc1e861181c118610cf055e01f5d97",
+    "initial_policy_fingerprint": "7040300522d6a8e37168797ec9491af171e2328824b765546bbbe484249f9dd9",
+    "tokenizer_fingerprint": "7a50b53b219d9620306d5534cbe74327e4cfb72faf5578fc52fe56f9bc930791",
+    "data_fingerprint": "03a8a84ce5031499274a9051fb24a7ce1ca2bb52d1c4f3ff80f46ece33ac0eab",
+    "policy_forward_mode": "qwen3_hf_incremental_cache_v1",
+    "attention_implementation": "sdpa",
+    "precision": "bf16",
+    "world_size": 2,
+    "environment": {
+      "cuda": "12.4",
+      "cudnn": "90100",
+      "driver": "580.173.02",
+      "gpu": "NVIDIA A100-SXM4-40GB",
+      "gpu_count": 2,
+      "nccl": "2.21.5",
+      "python": "3.10.12",
+      "torch": "2.6.0+cu124",
+      "transformers": "4.57.6"
+    },
+    "provenance": {
+      "base_image": null,
+      "build_revision": null,
+      "command": null,
+      "complete": false,
+      "git_dirty": true,
+      "git_revision": "4ade509b5f0d5213ea625da2cd46c71d7e374337",
+      "image_id": null,
+      "image_ref": null,
+      "missing_fields": [
+        "base_image",
+        "build_revision",
+        "clean_worktree",
+        "command",
+        "image_id",
+        "image_ref"
+      ]
+    },
+    "source_sha256": "4deb1868eebe64408ba8e0e2d43d383a1714710113ee8f1ed61728c3da96418a"
+  },
+  "update_smoke": {
+    "status": "ok",
+    "global_step": 1,
+    "optimizer_updated": true,
+    "dp_parameters_consistent": true,
+    "resumed": false,
+    "initial_logprob_max_error": 0.0,
+    "initial_policy_fingerprint": "7040300522d6a8e37168797ec9491af171e2328824b765546bbbe484249f9dd9",
+    "updated_policy_fingerprint": "305ea567540d0dbb854bc81061618413325e03b34e47f5b5f86c5b77ac0a045f",
+    "policy_state_sha256": "c1dfac89b33acfcd3e06070693b31505d5ce0c3b36003c099b0466c59b5b2bec",
+    "world_size": 2,
+    "precision": "bf16",
+    "policy_forward_mode": "qwen3_hf_incremental_cache_v1",
+    "source_sha256": "4deb1868eebe64408ba8e0e2d43d383a1714710113ee8f1ed61728c3da96418a"
+  },
+  "resume_smoke": {
+    "status": "ok",
+    "global_step": 2,
+    "optimizer_updated": true,
+    "dp_parameters_consistent": true,
+    "resumed": true,
+    "initial_logprob_max_error": 0.0,
+    "initial_policy_fingerprint": "7040300522d6a8e37168797ec9491af171e2328824b765546bbbe484249f9dd9",
+    "updated_policy_fingerprint": "b253a824351f70e6db7d1491de24923eae755ab9daff4c35ff9c232fd7e3cc7d",
+    "policy_state_sha256": "f070d756db218e5735347ae083672a828bfd9ffa19215000f2eeaa1c50f1a7d9",
+    "world_size": 2,
+    "precision": "bf16",
+    "policy_forward_mode": "qwen3_hf_incremental_cache_v1",
+    "source_sha256": "4deb1868eebe64408ba8e0e2d43d383a1714710113ee8f1ed61728c3da96418a"
+  },
+  "data_manifest": {
+    "dataset": "openai/gsm8k",
+    "license": "MIT",
+    "source_urls": {
+      "train": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl",
+      "test": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl"
+    },
+    "source_sha256": {
+      "train": "17f347dc51477c50d4efb83959dbb7c56297aba886e5544ee2aaed3024813465",
+      "test": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14"
+    },
+    "official_counts": {
+      "train": 7473,
+      "test": 1319
+    },
+    "prepared_counts": {
+      "train": 256,
+      "test": 1319
+    },
+    "train_sample_seed": 2026,
+    "train_indices_sha256": "f8e2a9729458edfdd952a5cb6c43ea8b4f8072252b24cda65e700c5bcf296664"
+  },
+  "limitations": [
+    "HF reference is a serial correctness baseline, not a serving throughput result.",
+    "The full preflight precedes formal optimization; update and resume evidence here are smoke runs.",
+    "Historical SGLang artifacts did not pass the same gate and are not the behavior policy for this run.",
+    "Execution used a dirty working tree; original source fingerprints are retained, not relabeled as a clean commit."
+  ]
+}

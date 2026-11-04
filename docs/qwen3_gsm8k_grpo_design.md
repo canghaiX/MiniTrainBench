@@ -71,12 +71,49 @@ diagnostic shows exact agreement between stored generation and SGLang scores
 for checked positions, with residual SGLang/HF forward differences above the
 gate on rare tokens. See
 [`gsm8k_logprob_alignment_diagnostic.json`](gsm8k_logprob_alignment_diagnostic.json).
+The follow-up recheck found that full-sequence and prefix HF forwards differ
+for two worst-case tokens; repeated SGLang scores were stable. The public
+SGLang hidden-state response exposes only the final state. A separate
+forward-hook capture found the first significant block divergence at layers
+15, 17, and 7 on the three fixed worst cases; divergence grows with depth, but
+the first layer is sample-dependent and does not establish a single operator
+root cause. See the layerwise report in InferKernelLab. The SGLang artifact's
+strict gate still fails, so it remains ineligible for optimizer updates.
+
+InferKernelLab also provides a separate `hf_reference` correctness rollout.
+It samples Qwen3 one completion at a time through Transformers `DynamicCache`,
+and records the PyTorch/Transformers versions, SDPA mode, FP32 weights and
+autocast dtype. MiniTrainBench selects the incremental, gradient-enabled cache
+scorer only for this explicit artifact contract; old SGLang and Llama artifacts
+retain their existing full-sequence path. The serial reference is intentionally
+low throughput and is not a serving performance claim.
+
+An initial A100 4-prompt/8-completion smoke passed its 1,024-token policy
+preflight with max absolute error 0.0, but its 32-token cap truncated every
+completion and produced no optimizer update. The expanded 8-prompt smoke then
+passed all 11,332 response tokens with max error 0.0, produced within-group
+reward variance, and completed one dual-GPU BF16 update. Parameters changed,
+rank digests matched, and peak allocated memory was 19.7 GiB. The script now
+checks these conditions. DCP resume then reached step 2, passed the same
+preflight, changed the policy, and retained matching rank digests; peak
+allocated memory was 23.9 GiB. No full 256 × 8 HF reference gate or updated-
+model EM has been measured yet.
+
+Incremental actor training processes one completion at a time and backpropagates
+its equally weighted contribution immediately, preserving the mean over
+completions/groups while releasing each cache graph. DDP buffer broadcasts are
+disabled after initial wrapper synchronization because different completion
+lengths cause different numbers of token forwards per rank; gradient reduction
+still occurs on the final completion backward. The first A100 attempt exposed
+both mismatched per-forward collectives and excessive graph memory; the current
+path passed the two-rank update/resume smoke with a lower observed peak.
 
 Successful runs verify rank parameter digests, export a local HF checkpoint,
 and support DCP resume. Evaluation restarts SGLang with each exported model;
 the summarizer requires matching seeds, model fingerprints, dataset, tokenizer,
 prompt and generation settings, a passed probe, actual parameter changes and
-consistent DDP parameters before calculating three-seed mean/sample std.
+consistent DDP parameters before calculating metrics. A single seed has an
+undefined sample standard deviation (`null`), rather than a zero deviation.
 
 ## Reproduction
 
@@ -86,12 +123,24 @@ are required by the reproduction script. Its fixed SGLang image reports
 version 0.5.18; runtime/image metadata are saved alongside results.
 
 ```bash
-OUT_ROOT=results/gsm8k_grpo_run \
-INFER_ROOT=/data/InferKernelLab SERVER_GPU=7 TRAIN_GPUS=0,1 \
-  bash scripts/run_gsm8k_grpo_cycle.sh
+OUT_ROOT=results/gsm8k_hf_reference \
+INFER_ROOT=/data/InferKernelLab SERVER_GPU=7 TRAIN_GPUS=0,1 HF_REFERENCE_GPU=0 \
+  bash scripts/run_gsm8k_hf_reference_cycle.sh
 ```
 
-The script fails at a failed preflight; it does not silently train or produce
-updated-model accuracy statistics. Preserve the JSON diagnostic and resolve
-the numerical mismatch before claiming completion of the three-seed cycle.
+The script defaults to seed 2026 and an eight-prompt update/resume smoke. It
+prepares data offline from verified local source files and runs a complete
+rollout preflight before formal updates. `SEEDS="2026 2027 2028"` explicitly
+enables multiple seeds; every full gate must pass before any formal update.
+It fails at any failed gate and does not produce updated-model accuracy
+statistics for an incomplete run. `--evaluate-only` resumes after completed
+training, validating the update report before starting evaluation.
+
+Smoke exports and checkpoints are deleted after successful resume validation;
+formal training retains only the latest two DCP snapshots. Once full test
+evaluation and the summary are accepted, formal checkpoints are deleted too.
+The one updated model, small reports, dataset and rollout remain local. Cleanup
+is restricted to named intermediate directories, rejects symlinks and writes
+a JSON audit; it never deletes another experiment. Container logs are bounded
+to 10 MB and the experiment container is removed on exit.
 This is fixed offline rollout training, not an asynchronous online RL system.

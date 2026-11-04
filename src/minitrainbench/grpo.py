@@ -262,6 +262,51 @@ def _load_transformers():
     return AutoConfig, AutoModelForCausalLM
 
 
+def _validate_hf_reference_contract(
+    manifest: dict[str, Any],
+    *,
+    model_type: str,
+    precision: str,
+    attention_implementation: str,
+) -> str | None:
+    engine = manifest.get("engine")
+    if engine != "hf_reference":
+        if engine not in {None, "paged_hf", "sglang"}:
+            raise ValueError(f"unsupported rollout engine: {engine}")
+        return None
+    if model_type != "qwen3":
+        raise ValueError("HF incremental reference rollouts currently require Qwen3")
+    contract = manifest.get("forward_contract")
+    if contract is None:
+        raise ValueError("HF reference rollout is missing its forward contract")
+    if not isinstance(contract, dict):
+        raise TypeError("HF reference forward contract must be a JSON object")
+    try:
+        import transformers
+    except ImportError as error:
+        raise RuntimeError("HF reference rollout requires Transformers") from error
+    expected = {
+        "name": "qwen3_hf_incremental_cache_v1",
+        "attention_implementation": attention_implementation,
+        "weights_dtype": "float32",
+        "autocast_dtype": {"fp32": "float32", "bf16": "bfloat16"}.get(precision),
+        "torch_version": torch.__version__,
+        "transformers_version": transformers.__version__,
+    }
+    mismatches = {
+        key: (contract.get(key), value)
+        for key, value in expected.items()
+        if contract.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"HF rollout forward contract mismatch: {mismatches}")
+    if manifest.get("logprob_convention") != "temperature_scaled_untruncated_policy":
+        raise ValueError("HF reference rollout has an unsupported logprob convention")
+    if manifest.get("sampling", {}).get("top_p") != 1.0:
+        raise ValueError("HF reference GRPO requires top_p=1 for an untruncated policy")
+    return str(contract["name"])
+
+
 def _precision_dtype(name: str, device: torch.device) -> torch.dtype:
     if name == "fp32":
         return torch.float32
@@ -326,6 +371,70 @@ def _selected_logprobs(
             all_new.append(row_new)
             completion_index += 1
     return all_new
+
+
+def _incremental_sequence_logprobs(
+    model: torch.nn.Module,
+    prompt: list[int],
+    response: list[int],
+    device: torch.device,
+    *,
+    temperature: float,
+) -> torch.Tensor:
+    if not prompt or not response or temperature <= 0:
+        raise ValueError(
+            "incremental logprob scoring requires nonempty tokens and positive temperature"
+        )
+    input_ids = torch.tensor([prompt], dtype=torch.long, device=device)
+    attention_mask = torch.ones_like(input_ids)
+    output = model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        use_cache=True,
+        return_dict=True,
+    )
+    logits = output.logits[:, -1].float()
+    cache = output.past_key_values
+    values = []
+    for index, target in enumerate(response):
+        logprobs = torch.log_softmax(logits / temperature, dim=-1)
+        target_tensor = torch.tensor([target], dtype=torch.long, device=device)
+        values.append(logprobs.gather(-1, target_tensor.unsqueeze(-1)).squeeze())
+        if index + 1 < len(response):
+            token = target_tensor.view(1, 1)
+            attention_mask = torch.ones(
+                (1, len(prompt) + index + 1), dtype=torch.long, device=device
+            )
+            output = model(
+                input_ids=token,
+                attention_mask=attention_mask,
+                past_key_values=cache,
+                use_cache=True,
+                return_dict=True,
+            )
+            logits = output.logits[:, -1].float()
+            cache = output.past_key_values
+    return torch.stack(values)
+
+
+def _incremental_group_logprobs(
+    model: torch.nn.Module,
+    groups: list[dict[str, Any]],
+    device: torch.device,
+    *,
+    temperature: float,
+) -> list[torch.Tensor]:
+    values = []
+    for group in groups:
+        prompt = [int(token) for token in group["prompt_tokens"]]
+        for completion in group["completions"]:
+            response = [int(token) for token in completion["response_tokens"]]
+            values.append(
+                _incremental_sequence_logprobs(
+                    model, prompt, response, device, temperature=temperature
+                )
+            )
+    return values
 
 
 def _group_advantages(
@@ -433,17 +542,30 @@ def _verify_rollout_logprobs(
     dtype: torch.dtype,
     temperature: float,
     tolerance: float,
+    *,
+    incremental: bool = False,
 ) -> dict[str, Any]:
     local_deltas = []
     worst = {"abs_error": -1.0}
     with torch.no_grad():
-        for group in groups:
-            input_ids, mask, _, old_logprobs, _ = _prepare_batch([group], context.device)
+        for group_index, group in enumerate(groups):
             with torch.autocast(
                 device_type=context.device.type, dtype=dtype, enabled=dtype != torch.float32
             ):
-                logits = reference(input_ids=input_ids, attention_mask=mask, use_cache=False).logits
-            actual = _selected_logprobs(logits, input_ids, [group], temperature=temperature)
+                if incremental:
+                    old_logprobs = [
+                        torch.tensor(item["old_logprobs"], dtype=torch.float32)
+                        for item in group["completions"]
+                    ]
+                    actual = _incremental_group_logprobs(
+                        reference, [group], context.device, temperature=temperature
+                    )
+                else:
+                    input_ids, mask, _, old_logprobs, _ = _prepare_batch([group], context.device)
+                    logits = reference(
+                        input_ids=input_ids, attention_mask=mask, use_cache=False
+                    ).logits
+                    actual = _selected_logprobs(logits, input_ids, [group], temperature=temperature)
             for completion_index, (new, old) in enumerate(zip(actual, old_logprobs)):
                 delta = (new - old.to(context.device)).float().cpu()
                 local_deltas.append(delta)
@@ -457,6 +579,12 @@ def _verify_rollout_logprobs(
                         "current_logprob": float(new[position]),
                         "old_logprob": float(old[position]),
                     }
+            if context.is_main and (group_index + 1) % 8 == 0:
+                print(
+                    f"GRPO preflight rank=0 groups={group_index + 1}/{len(groups)}",
+                    file=sys.stderr,
+                    flush=True,
+                )
     payload = {"deltas": torch.cat(local_deltas), "worst": worst}
     parts = [None] * context.world_size
     if context.world_size > 1:
@@ -480,6 +608,54 @@ def _verify_rollout_logprobs(
         ),
         "worst": max((part["worst"] for part in parts), key=lambda item: item["abs_error"]),
     }
+
+
+def _load_verified_preflight_report(
+    path: str | Path,
+    *,
+    expected_model: str,
+    expected_tokenizer: str,
+    rollout_digest: str,
+    expected_precision: str,
+    expected_attention: str,
+    expected_forward_mode: str,
+    expected_world_size: int,
+    expected_token_count: int,
+    tolerance: float,
+) -> dict[str, Any]:
+    """Reuse a completed full gate only after binding it to this train input."""
+    report = json.loads(Path(path).read_text(encoding="utf-8"))
+    probe = report.get("logprob_probe")
+    if not isinstance(probe, dict):
+        raise TypeError("preflight report is missing logprob_probe")
+    expected = {
+        "status": "ok",
+        "initial_policy_fingerprint": expected_model,
+        "tokenizer_fingerprint": expected_tokenizer,
+        "rollout_sha256": rollout_digest,
+        "precision": expected_precision,
+        "attention_implementation": expected_attention,
+        "policy_forward_mode": expected_forward_mode,
+        "world_size": expected_world_size,
+    }
+    for field, value in expected.items():
+        if report.get(field) != value:
+            raise ValueError(f"preflight report {field} does not match current training input")
+    if report.get("optimizer_updated") is not False:
+        raise ValueError("preflight report must be produced before optimizer updates")
+    if probe.get("passed") is not True:
+        raise ValueError("preflight report did not pass its logprob gate")
+    if probe.get("token_count") != expected_token_count:
+        raise ValueError("preflight report token count does not match the rollout")
+    error = probe.get("max_abs_error")
+    if not isinstance(error, (int, float)) or not math.isfinite(error) or error > tolerance:
+        raise ValueError("preflight report max logprob error exceeds the current tolerance")
+    report_tolerance = probe.get("tolerance")
+    if not isinstance(report_tolerance, (int, float)) or not math.isfinite(report_tolerance):
+        raise ValueError("preflight report tolerance is not finite")
+    if report_tolerance > tolerance:
+        raise ValueError("preflight report was produced with a looser tolerance")
+    return probe
 
 
 def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -519,15 +695,16 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
     )
     if manifest.get("tokenizer_fingerprint") != expected_tokenizer:
         raise ValueError("rollout tokenizer fingerprint does not match the local tokenizer")
-    if manifest.get("engine") == "sglang":
-        server = manifest.get("sglang_server", {})
-        server_digest = hashlib.sha256(json.dumps(server, sort_keys=True).encode()).hexdigest()
-        if server.get("version") != "0.5.18" or server_digest != manifest.get(
-            "sglang_server_fingerprint"
-        ):
-            raise ValueError("invalid SGLang version or server fingerprint")
+    if manifest.get("engine") in {"sglang", "hf_reference"}:
+        if manifest.get("engine") == "sglang":
+            server = manifest.get("sglang_server", {})
+            server_digest = hashlib.sha256(json.dumps(server, sort_keys=True).encode()).hexdigest()
+            if server.get("version") != "0.5.18" or server_digest != manifest.get(
+                "sglang_server_fingerprint"
+            ):
+                raise ValueError("invalid SGLang version or server fingerprint")
         if manifest["sampling"]["top_p"] != 1.0:
-            raise ValueError("SGLang GRPO requires top_p=1 for an untruncated policy")
+            raise ValueError("GRPO rollout requires top_p=1 for an untruncated policy")
         if manifest.get("reward_function") == "gsm8k_exact_match_v1":
             data_path = Path(manifest.get("data_manifest", ""))
             prompt_path = Path(manifest.get("prompt_file", ""))
@@ -581,6 +758,8 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
         if context.device.type == "cuda":
             torch.cuda.manual_seed_all(args.seed)
         dtype = _precision_dtype(args.precision, context.device)
+        import transformers
+
         config_class, model_class = _load_transformers()
         model_config = config_class.from_pretrained(args.model_path, local_files_only=True)
         if model_config.model_type not in {"llama", "qwen3"}:
@@ -591,9 +770,16 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             "llama": "LlamaForCausalLM",
             "qwen3": "Qwen3ForCausalLM",
         }[model_config.model_type]
+        attention_implementation = getattr(args, "attention_implementation", "eager")
+        forward_mode = _validate_hf_reference_contract(
+            manifest,
+            model_type=model_config.model_type,
+            precision=args.precision,
+            attention_implementation=attention_implementation,
+        )
+        incremental_forward = forward_mode is not None
         if manifest.get("architecture") != expected_architecture:
             raise ValueError("rollout architecture does not match --model-path")
-        attention_implementation = getattr(args, "attention_implementation", "eager")
         model_config._attn_implementation = attention_implementation
         actor = model_class.from_pretrained(
             args.model_path,
@@ -623,6 +809,11 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
         reference.eval()
         strategy = DDPStrategy()
         actor = strategy.wrap_model(actor, context, args.precision)
+        if incremental_forward and isinstance(actor, DistributedDataParallel):
+            # Cached decoding performs one DDP forward per response token; ranks
+            # can have different completion lengths, so per-forward buffer
+            # broadcasts would issue collectives in different sequences.
+            actor.broadcast_buffers = False
         actor_model = actor.module if isinstance(actor, DistributedDataParallel) else actor
         optimizer = torch.optim.AdamW(actor.parameters(), lr=args.learning_rate, weight_decay=0.0)
         scheduler = LearningRateScheduler(
@@ -653,6 +844,7 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
                     if attention_implementation != "eager"
                     else {}
                 ),
+                **({"policy_forward_mode": forward_mode} if forward_mode else {}),
                 "sampling": manifest["sampling"],
                 "seed": args.seed,
                 "max_grad_norm": args.max_grad_norm,
@@ -665,14 +857,36 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             if model_config.model_type == "qwen3" and dtype == torch.bfloat16
             else (5e-2 if dtype == torch.bfloat16 else 2e-3)
         )
-        logprob_probe = _verify_rollout_logprobs(
-            reference,
-            local_groups,
-            context,
-            dtype,
-            temperature,
-            args.logprob_tolerance or default_logprob_tolerance,
-        )
+        tolerance = args.logprob_tolerance or default_logprob_tolerance
+        preflight_report = getattr(args, "preflight_report", None)
+        if preflight_report:
+            expected_token_count = sum(
+                len(completion["response_tokens"])
+                for group in groups
+                for completion in group["completions"]
+            )
+            logprob_probe = _load_verified_preflight_report(
+                preflight_report,
+                expected_model=expected_model,
+                expected_tokenizer=expected_tokenizer,
+                rollout_digest=rollout_digest,
+                expected_precision=args.precision,
+                expected_attention=attention_implementation,
+                expected_forward_mode=forward_mode or "hf_full_sequence_v1",
+                expected_world_size=context.world_size,
+                expected_token_count=expected_token_count,
+                tolerance=tolerance,
+            )
+        else:
+            logprob_probe = _verify_rollout_logprobs(
+                reference,
+                local_groups,
+                context,
+                dtype,
+                temperature,
+                tolerance,
+                incremental=incremental_forward,
+            )
         initial_logprob_error = logprob_probe["max_abs_error"]
         if not logprob_probe["passed"] or getattr(args, "preflight_only", False):
             preflight_result = {
@@ -684,6 +898,7 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
                 "world_size": context.world_size,
                 "precision": args.precision,
                 "attention_implementation": attention_implementation,
+                "policy_forward_mode": forward_mode or "hf_full_sequence_v1",
                 "initial_policy_fingerprint": expected_model,
                 "tokenizer_fingerprint": expected_tokenizer,
                 "rollout_sha256": rollout_digest,
@@ -697,6 +912,7 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
                 "environment": {
                     "python": platform.python_version(),
                     "torch": torch.__version__,
+                    "transformers": transformers.__version__,
                     "cuda": torch.version.cuda,
                     "gpu": torch.cuda.get_device_name(context.device)
                     if context.device.type == "cuda"
@@ -770,50 +986,120 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             }
             for micro_start in range(0, len(selected_groups), microbatch_groups):
                 micro_groups = selected_groups[micro_start : micro_start + microbatch_groups]
-                input_ids, attention_mask, group_indices, old_logprobs, _ = _prepare_batch(
-                    micro_groups, context.device
-                )
-                advantages, _ = _group_advantages(micro_groups, context.device)
-                weight = len(micro_groups) / len(selected_groups)
                 last_microbatch = micro_start + microbatch_groups >= len(selected_groups)
-                sync_context = (
-                    actor.no_sync()
-                    if isinstance(actor, DistributedDataParallel) and not last_microbatch
-                    else nullcontext()
-                )
-                with (
-                    sync_context,
-                    torch.autocast(
-                        device_type=context.device.type,
-                        dtype=dtype,
-                        enabled=autocast_enabled,
-                    ),
-                ):
-                    actor_outputs = actor(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        use_cache=False,
-                        return_dict=True,
+                if incremental_forward:
+                    completions_per_group = len(micro_groups[0]["completions"])
+                    sequence_weight = 1.0 / (len(selected_groups) * completions_per_group)
+                    completion_index = 0
+                    for local_group_index, group in enumerate(micro_groups):
+                        group_advantages, _ = _group_advantages([group], context.device)
+                        prompt = [int(token) for token in group["prompt_tokens"]]
+                        for item, advantage in zip(group["completions"], group_advantages):
+                            completion_index += 1
+                            sync_gradients = last_microbatch and (
+                                local_group_index == len(micro_groups) - 1
+                                and completion_index == len(micro_groups) * completions_per_group
+                            )
+                            sync_context = (
+                                actor.no_sync()
+                                if isinstance(actor, DistributedDataParallel) and not sync_gradients
+                                else nullcontext()
+                            )
+                            with (
+                                sync_context,
+                                torch.autocast(
+                                    device_type=context.device.type,
+                                    dtype=dtype,
+                                    enabled=autocast_enabled,
+                                ),
+                            ):
+                                response = [int(token) for token in item["response_tokens"]]
+                                new_logprobs = _incremental_sequence_logprobs(
+                                    actor,
+                                    prompt,
+                                    response,
+                                    context.device,
+                                    temperature=temperature,
+                                )
+                                with torch.no_grad():
+                                    reference_logprobs = _incremental_sequence_logprobs(
+                                        reference,
+                                        prompt,
+                                        response,
+                                        context.device,
+                                        temperature=temperature,
+                                    )
+                                old_logprobs = torch.tensor(
+                                    item["old_logprobs"],
+                                    dtype=torch.float32,
+                                    device=context.device,
+                                )
+                                loss, metrics = _grpo_objective(
+                                    [new_logprobs],
+                                    [reference_logprobs],
+                                    [old_logprobs],
+                                    [advantage],
+                                    (0,),
+                                    clip_epsilon=args.clip_epsilon,
+                                    kl_coef=args.kl_coef,
+                                    group_count=1,
+                                )
+                                finite_loss = _reduce_scalar(
+                                    torch.isfinite(loss).int(),
+                                    context,
+                                    op=dist.ReduceOp.MIN,
+                                )
+                                if not finite_loss:
+                                    raise FloatingPointError(f"non-finite GRPO loss at step {step}")
+                                (loss * sequence_weight).backward()
+                            loss_value += loss.detach() * sequence_weight
+                            for name in metric_values:
+                                metric_values[name] += metrics[name].detach() * sequence_weight
+                            del new_logprobs, reference_logprobs, loss
+                else:
+                    input_ids, attention_mask, group_indices, old_logprobs, _ = _prepare_batch(
+                        micro_groups, context.device
                     )
-                    new_logprobs = _selected_logprobs(
-                        actor_outputs.logits,
-                        input_ids,
-                        micro_groups,
-                        temperature=temperature,
+                    advantages, _ = _group_advantages(micro_groups, context.device)
+                    weight = len(micro_groups) / len(selected_groups)
+                    sync_context = (
+                        actor.no_sync()
+                        if isinstance(actor, DistributedDataParallel) and not last_microbatch
+                        else nullcontext()
                     )
-                    with torch.no_grad():
-                        reference_outputs = reference(
+                    with (
+                        sync_context,
+                        torch.autocast(
+                            device_type=context.device.type,
+                            dtype=dtype,
+                            enabled=autocast_enabled,
+                        ),
+                    ):
+                        actor_outputs = actor(
                             input_ids=input_ids,
                             attention_mask=attention_mask,
                             use_cache=False,
                             return_dict=True,
                         )
-                        reference_logprobs = _selected_logprobs(
-                            reference_outputs.logits,
+                        new_logprobs = _selected_logprobs(
+                            actor_outputs.logits,
                             input_ids,
                             micro_groups,
                             temperature=temperature,
                         )
+                        with torch.no_grad():
+                            reference_outputs = reference(
+                                input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                use_cache=False,
+                                return_dict=True,
+                            )
+                            reference_logprobs = _selected_logprobs(
+                                reference_outputs.logits,
+                                input_ids,
+                                micro_groups,
+                                temperature=temperature,
+                            )
                     loss, metrics = _grpo_objective(
                         new_logprobs,
                         reference_logprobs,
@@ -902,6 +1188,15 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
                     keep_last=args.keep_last,
                 )
 
+            if context.is_main:
+                print(
+                    f"GRPO step={state.global_step}/{args.steps} "
+                    f"loss={loss_history[-1]:.6g} tokens={state.tokens_seen} "
+                    f"step_s={step_times[-1]:.1f}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
         final_digest = _model_digest(actor_model)
         updated = initial_digest != final_digest
         updated_flag = torch.tensor(int(updated), dtype=torch.int32, device=context.device)
@@ -940,6 +1235,8 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             "world_size": context.world_size,
             "strategy": "ddp",
             "precision": args.precision,
+            "rollout_engine": manifest.get("engine", "paged_hf"),
+            "policy_forward_mode": forward_mode or "hf_full_sequence_v1",
             "attention_implementation": attention_implementation,
             "global_step": state.global_step,
             "prompt_groups": len(groups),
@@ -984,6 +1281,7 @@ def train_grpo(args: argparse.Namespace) -> dict[str, Any] | None:
             "environment": {
                 "python": platform.python_version(),
                 "torch": torch.__version__,
+                "transformers": transformers.__version__,
                 "cuda": torch.version.cuda,
                 "device": str(context.device),
                 "gpu": torch.cuda.get_device_name(context.local_rank)
@@ -1027,6 +1325,11 @@ def add_grpo_parser(subparsers) -> None:
         "--preflight-only",
         action="store_true",
         help="validate every rollout token without updating parameters",
+    )
+    parser.add_argument(
+        "--preflight-report",
+        default=None,
+        help="reuse a matching completed full gate before optimizer updates",
     )
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--checkpoint-dir", default=None)

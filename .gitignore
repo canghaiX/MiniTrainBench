@@ -36,3 +36,4 @@ results/megatron_preflight/
 results/.megatron_formal_staging/
 results/.megatron_publish/
 results/gsm8k_grpo/
+results/gsm8k_hf_reference*/

@@ -54,3 +54,14 @@ def test_download_rejects_wrong_sha256(tmp_path, monkeypatch):
     monkeypatch.setattr(module.subprocess, "run", download)
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         module.download_and_verify("train", tmp_path / "train.jsonl")
+
+
+def test_offline_source_missing_fails_without_network(tmp_path, monkeypatch):
+    module = _module()
+
+    def unexpected_download(*args, **kwargs):
+        raise AssertionError("offline preparation must not access the network")
+
+    monkeypatch.setattr(module.subprocess, "run", unexpected_download)
+    with pytest.raises(ValueError, match="offline mode"):
+        module.download_and_verify("train", tmp_path / "missing.jsonl", offline=True)

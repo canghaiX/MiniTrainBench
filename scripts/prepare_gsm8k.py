@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import random
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -20,12 +21,14 @@ SHA256 = {
 }
 
 
-def download_and_verify(name: str, destination: Path) -> str:
+def download_and_verify(name: str, destination: Path, *, offline: bool = False) -> str:
     if destination.exists():
         digest = hashlib.sha256(destination.read_bytes()).hexdigest()
         if digest == SHA256[name]:
             return digest
     if not destination.exists() or digest != SHA256[name]:
+        if offline:
+            raise ValueError(f"{name} source missing or SHA-256 mismatch in offline mode")
         temporary = destination.with_suffix(destination.suffix + ".download")
         subprocess.run(
             [
@@ -74,6 +77,8 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--train-samples", type=int, default=256)
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--source-dir", type=Path, help="copy verified *.source.jsonl locally")
+    parser.add_argument("--offline", action="store_true", help="never download missing sources")
     args = parser.parse_args()
     if args.train_samples <= 0:
         raise SystemExit("--train-samples must be positive")
@@ -83,7 +88,14 @@ def main() -> None:
     digests = {}
     for name in ("train", "test"):
         path = root / f"{name}.source.jsonl"
-        digests[name] = download_and_verify(name, path)
+        if args.source_dir is not None:
+            source = args.source_dir / path.name
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+            if digest != SHA256[name]:
+                raise ValueError(f"{name} source SHA-256 mismatch: {digest}")
+            if source.resolve() != path.resolve():
+                shutil.copyfile(source, path)
+        digests[name] = download_and_verify(name, path, offline=args.offline)
         raw[name] = load_jsonl(path)
     if args.train_samples > len(raw["train"]):
         raise SystemExit("--train-samples exceeds the official train split")

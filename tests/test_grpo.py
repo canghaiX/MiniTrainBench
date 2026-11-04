@@ -14,6 +14,7 @@ from minitrainbench.cli import build_parser
 from minitrainbench.grpo import (
     _group_advantages,
     _grpo_objective,
+    _incremental_group_logprobs,
     _prepare_batch,
     _read_rollouts,
     _selected_logprobs,
@@ -90,6 +91,50 @@ def test_group_advantages_and_zero_variance():
     advantages, count = _group_advantages(groups, torch.device("cpu"))
     assert advantages == [1.0, -1.0, 0.0, 0.0]
     assert count == 1
+
+
+def test_per_completion_grpo_backward_matches_group_mean_gradient():
+    old = [torch.tensor([-1.2, -0.7]), torch.tensor([-0.9]), torch.tensor([-1.5, -0.8])]
+    reference = [torch.tensor([-1.1, -0.8]), torch.tensor([-0.85]), torch.tensor([-1.4, -0.9])]
+    advantages = [1.0, -1.0, 0.5]
+    group_indices = (0, 0, 1)
+    full_new = [
+        torch.tensor([-1.0, -0.8], requires_grad=True),
+        torch.tensor([-0.95], requires_grad=True),
+        torch.tensor([-1.3, -0.9], requires_grad=True),
+    ]
+    full_loss, _ = _grpo_objective(
+        full_new,
+        reference,
+        old,
+        advantages,
+        group_indices,
+        clip_epsilon=0.2,
+        kl_coef=0.01,
+        group_count=2,
+    )
+    full_loss.backward()
+    full_gradients = [value.grad.clone() for value in full_new]
+
+    split_new = [value.detach().clone().requires_grad_() for value in full_new]
+    for index, (new, old_value, reference_value, advantage, group_index) in enumerate(
+        zip(split_new, old, reference, advantages, group_indices)
+    ):
+        group_size = group_indices.count(group_index)
+        sequence_loss, _ = _grpo_objective(
+            [new],
+            [reference_value],
+            [old_value],
+            [advantage],
+            (0,),
+            clip_epsilon=0.2,
+            kl_coef=0.01,
+            group_count=1,
+        )
+        sequence_loss.div(2 * group_size).backward()
+
+    for actual, expected in zip((value.grad for value in split_new), full_gradients):
+        torch.testing.assert_close(actual, expected)
 
 
 def test_gsm8k_reward_is_numeric_exact_match():
@@ -307,6 +352,87 @@ def artifact(tmp_path):
     return model_path, path
 
 
+def _hf_reference_artifact(tmp_path):
+    transformers = pytest.importorskip("transformers")
+    torch.manual_seed(231)
+    config = transformers.Qwen3Config(
+        vocab_size=64,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=32,
+        eos_token_id=63,
+        attention_dropout=0.0,
+    )
+    config._attn_implementation = "sdpa"
+    model = transformers.Qwen3ForCausalLM(config).eval()
+    model_path = tmp_path / "hf-reference-qwen3"
+    model.save_pretrained(model_path)
+    groups = [
+        {
+            "type": "prompt_group",
+            "group_id": str(index),
+            "prompt_tokens": list(prompt),
+            "target_tokens": [3, 5],
+            "completions": [
+                {
+                    "response_tokens": [3, 5, 9],
+                    "old_logprobs": [],
+                    "reward": 2.0 / 3.0,
+                    "finish_reason": "length",
+                },
+                {
+                    "response_tokens": [6, 7, 8],
+                    "old_logprobs": [],
+                    "reward": 0.0,
+                    "finish_reason": "length",
+                },
+            ],
+        }
+        for index, prompt in enumerate(([1, 4], [2, 6, 9]))
+    ]
+    with torch.no_grad():
+        logprobs = iter(
+            _incremental_group_logprobs(model, groups, torch.device("cpu"), temperature=0.8)
+        )
+        for group in groups:
+            for completion in group["completions"]:
+                completion["old_logprobs"] = next(logprobs).tolist()
+    manifest = {
+        "type": "manifest",
+        "schema_version": 1,
+        "architecture": "Qwen3ForCausalLM",
+        "model_type": "qwen3",
+        "engine": "hf_reference",
+        "forward_contract": {
+            "name": "qwen3_hf_incremental_cache_v1",
+            "attention_implementation": "sdpa",
+            "weights_dtype": "float32",
+            "autocast_dtype": "float32",
+            "torch_version": torch.__version__,
+            "transformers_version": transformers.__version__,
+        },
+        "logprob_convention": "temperature_scaled_untruncated_policy",
+        "model_fingerprint": model_fingerprint(model_path),
+        "tokenizer_fingerprint": hashlib.sha256(b"token_ids:vocab=64").hexdigest(),
+        "tokenizer_mode": "token_ids",
+        "vocab_size": 64,
+        "sampling": {"temperature": 0.8, "top_p": 1.0, "seed": 231},
+        "generation": {
+            "num_generations": 2,
+            "max_new_tokens": 3,
+            "eos_token_ids": [63],
+        },
+        "reward_function": "token_prefix_accuracy_v1",
+        "prompt_group_count": len(groups),
+    }
+    path = tmp_path / "hf-reference-rollouts.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in [manifest, *groups]) + "\n")
+    return model_path, path
+
+
 def _arguments(artifact, tmp_path, label, *, steps=1, resume=False):
     model_path, rollout_path = artifact
     arguments = [
@@ -337,7 +463,105 @@ def _arguments(artifact, tmp_path, label, *, steps=1, resume=False):
     ]
     if resume:
         arguments.extend(["--resume", "latest"])
+    manifest = json.loads(rollout_path.read_text().splitlines()[0])
+    if manifest.get("engine") == "hf_reference":
+        arguments.extend(["--attention-implementation", "sdpa"])
     return arguments
+
+
+def test_hf_incremental_preflight_gradient_and_exact_resume(tmp_path):
+    artifact = _hf_reference_artifact(tmp_path)
+    args = build_parser().parse_args(_arguments(artifact, tmp_path, "preflight"))
+    args.preflight_only = True
+    preflight = train_grpo(args)
+    assert preflight["status"] == "ok"
+    assert preflight["policy_forward_mode"] == "qwen3_hf_incremental_cache_v1"
+    assert preflight["logprob_probe"]["max_abs_error"] <= 1e-6
+    assert not preflight["optimizer_updated"]
+
+    args = build_parser().parse_args(_arguments(artifact, tmp_path, "continuous", steps=2))
+    args.groups_per_step = 2
+    args.microbatch_groups = 1
+    args.checkpoint_dir = str(tmp_path / "continuous-checkpoints")
+    continuous = train_grpo(args)
+    assert continuous["optimizer_updated"]
+    assert continuous["dp_parameters_consistent"]
+
+    first_args = build_parser().parse_args(
+        _arguments(artifact, tmp_path, "first-incremental", steps=1)
+    )
+    first_args.groups_per_step = 2
+    first_args.microbatch_groups = 1
+    first_args.checkpoint_dir = str(tmp_path / "resume-checkpoints")
+    first_args.save_every = 1
+    train_grpo(first_args)
+    resumed_args = build_parser().parse_args(
+        _arguments(artifact, tmp_path, "resumed-incremental", steps=2, resume=True)
+    )
+    resumed_args.groups_per_step = 2
+    resumed_args.microbatch_groups = 1
+    resumed_args.checkpoint_dir = str(tmp_path / "resume-checkpoints")
+    resumed_args.save_every = 1
+    resumed = train_grpo(resumed_args)
+    assert resumed["resumed"]
+    assert resumed["policy_state_sha256"] == continuous["policy_state_sha256"]
+
+
+def test_matching_preflight_report_is_reused_for_update(tmp_path):
+    artifact = _hf_reference_artifact(tmp_path)
+    preflight_args = build_parser().parse_args(_arguments(artifact, tmp_path, "gate"))
+    preflight_args.preflight_only = True
+    train_grpo(preflight_args)
+
+    args = build_parser().parse_args(_arguments(artifact, tmp_path, "reused-gate"))
+    args.groups_per_step = 2
+    args.microbatch_groups = 1
+    args.preflight_report = str(tmp_path / "gate.json")
+    result = train_grpo(args)
+
+    assert result["optimizer_updated"]
+    assert result["logprob_probe"]["max_abs_error"] <= 1e-6
+
+
+def test_hf_incremental_rejects_runtime_contract_mismatch(tmp_path):
+    artifact = _hf_reference_artifact(tmp_path)
+    records = [json.loads(line) for line in artifact[1].read_text().splitlines()]
+    records[0]["forward_contract"]["transformers_version"] = "0.0.invalid"
+    artifact[1].write_text("\n".join(json.dumps(row) for row in records) + "\n")
+    args = build_parser().parse_args(_arguments(artifact, tmp_path, "contract-mismatch"))
+
+    with pytest.raises(ValueError, match="forward contract mismatch"):
+        train_grpo(args)
+    assert not Path(args.output_model).exists()
+
+
+def test_hf_incremental_two_process_gloo_updates_consistent_parameters(tmp_path):
+    artifact = _hf_reference_artifact(tmp_path)
+    environment = os.environ.copy()
+    environment.update(OMP_NUM_THREADS="1", MKL_NUM_THREADS="1", HF_HUB_OFFLINE="1")
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nproc_per_node=2",
+            "-m",
+            "minitrainbench",
+            *_arguments(artifact, tmp_path, "incremental-ddp"),
+        ],
+        check=False,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    report = json.loads((tmp_path / "incremental-ddp.json").read_text())
+    assert report["optimizer_updated"]
+    assert report["dp_parameters_consistent"]
+    assert report["logprob_probe"]["passed"]
 
 
 def test_rollout_validation_rejects_corrupt_tokens_rewards_and_logprobs(artifact, tmp_path):
