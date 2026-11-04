@@ -1,6 +1,6 @@
 # Qwen3/SGLang GSM8K 实验验收（2026-11-03）
 
-本页保留历史 SGLang 行为策略的失败预检与后续 HF smoke 记录。当前 seed 2026 的 HF reference 实验进度、已验证指标和复现命令见 [单 seed 验收记录](gsm8k_single_seed_run.md)；以下历史评测不能作为本轮初始/更新模型的完整评测结果。
+本页保留历史 SGLang 行为策略的失败预检与后续 HF smoke 记录。seed 2026 的 HF reference 闭环已验收，完整结果见 [最终报告](gsm8k_single_seed_result.md)，复现命令见 [单 seed 验收记录](gsm8k_single_seed_run.md)；以下历史评测不能作为本轮初始/更新模型的完整评测结果。
 
 **实现与组件 smoke 已通过，完整三 seed BF16 训练闭环尚未通过验收。**
 全部 256 × 8 rollout 的 logprob 预检失败，正式实验在 optimizer 更新前停止，
@@ -52,7 +52,7 @@ HF FlashAttention 2/3 kernel 在固定容器中不可用，SGLang deterministic 
 
 A100 更新 smoke 还发现增量路径的两个系统约束：不同 completion 长度使 DDP 每 token buffer broadcast 的 collective 序列不一致；把 8 条 completion 的 actor graph 同时保留则峰值达到 36.8 GiB 并 OOM。修复后对 incremental DDP 关闭逐 forward buffer broadcast，并逐 completion 反向累积等权梯度。双卡 smoke 已通过，观察峰值降至 19.7 GiB；CPU/Gloo 两 rank 测试验证了精确 DCP 恢复。
 
-当前正在执行 seed 2026 的完整 HF reference 闭环：先复跑 smoke，然后生成 256 × 8 rollout，全量 max-error gate 通过后训练 16 步，并用同一 SGLang 0.5.18/FA3 配置评估初始和更新模型的 1,319 题 test。全部验收完成后，轻量摘要可导出到 MiniTrainBench 的 `docs/benchmark_results/gsm8k_hf_reference_single_seed_2026.json`；在此之前不发布成功摘要。单 seed 的 EM 方差不定义，不会报告成 0，也不承诺指标提升。
+2026-11-04，seed 2026 的 HF reference 闭环已验收：256 × 8 rollout 的 419,959-token 全量 gate max error=0，双卡 BF16 16 步更新、rank 一致性和最终 DCP 回读通过；同一 SGLang 0.5.18/FA3 配置下，初始和更新模型均为 677/1,319（51.3268%）。没有测到 EM 提升。轻量摘要见 `docs/benchmark_results/gsm8k_hf_reference_single_seed_2026.json`。单 seed 标准差未定义（null），不报告为 0。
 
 ## 已通过的较小闭环组件
 

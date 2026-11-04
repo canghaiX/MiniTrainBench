@@ -1,0 +1,428 @@
+{
+  "schema_version": 1,
+  "task": "gsm8k_grpo",
+  "experiment_scope": "single_seed_exploratory",
+  "full_cycle_accepted": true,
+  "data_scope": {
+    "train": 256,
+    "test": 1319,
+    "source_sha256": {
+      "train": "17f347dc51477c50d4efb83959dbb7c56297aba886e5544ee2aaed3024813465",
+      "test": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14"
+    }
+  },
+  "seeds": [
+    "2026"
+  ],
+  "metrics": {
+    "exact_match": {
+      "count": 1,
+      "mean": 0.513267626990144,
+      "std": null,
+      "values": [
+        0.513267626990144
+      ]
+    },
+    "exact_match_delta_percentage_points": {
+      "count": 1,
+      "mean": 0.0,
+      "std": null,
+      "values": [
+        0.0
+      ]
+    },
+    "throughput_samples_per_sec": {
+      "count": 1,
+      "mean": 7.470190034308353,
+      "std": null,
+      "values": [
+        7.470190034308353
+      ]
+    },
+    "initial_logprob_max_error": {
+      "count": 1,
+      "mean": 0.0,
+      "std": null,
+      "values": [
+        0.0
+      ]
+    },
+    "peak_memory_allocated_bytes": {
+      "count": 1,
+      "mean": 28607769600.0,
+      "std": null,
+      "values": [
+        28607769600.0
+      ]
+    }
+  },
+  "rollouts": [
+    {
+      "type": "manifest",
+      "schema_version": 1,
+      "architecture": "Qwen3ForCausalLM",
+      "model_type": "qwen3",
+      "model_source": "/data/models/Qwen/Qwen3-0.6B",
+      "model_fingerprint": "7040300522d6a8e37168797ec9491af171e2328824b765546bbbe484249f9dd9",
+      "tokenizer_fingerprint": "7a50b53b219d9620306d5534cbe74327e4cfb72faf5578fc52fe56f9bc930791",
+      "tokenizer_mode": "text",
+      "vocab_size": 151936,
+      "task": "gsm8k",
+      "prompt_format": "gsm8k_chat_no_thinking_v1",
+      "sampling": {
+        "temperature": 0.8,
+        "top_p": 1.0,
+        "seed": 2026,
+        "request_seed_scheme": "sha256_base_seed_and_flat_index_v1"
+      },
+      "logprob_convention": "temperature_scaled_untruncated_policy",
+      "logprob_tolerance": 0.5,
+      "generation": {
+        "max_new_tokens": 256,
+        "num_generations": 8,
+        "eos_token_ids": [
+          151645,
+          151643
+        ]
+      },
+      "reward_function": "gsm8k_exact_match_v1",
+      "prompt_group_count": 256,
+      "backend": "hf_transformers_incremental",
+      "engine": "hf_reference",
+      "forward_contract": {
+        "name": "qwen3_hf_incremental_cache_v1",
+        "attention_implementation": "sdpa",
+        "weights_dtype": "float32",
+        "autocast_dtype": "bfloat16",
+        "torch_version": "2.6.0+cu124",
+        "transformers_version": "4.57.6"
+      },
+      "rollout_metrics": {
+        "elapsed_seconds": 12657.604605669156,
+        "generated_tokens": 419959,
+        "tokens_per_sec": 33.17839457648302,
+        "peak_memory_allocated_bytes": 3696577536
+      },
+      "dtype": "bfloat16",
+      "cache_released": true,
+      "environment": {
+        "python": "3.10.12",
+        "torch": "2.6.0+cu124",
+        "device": "cuda",
+        "gpu": "NVIDIA A100-SXM4-40GB"
+      },
+      "provenance": {
+        "git_revision": "ff164597a689baa0802d2dc21b706d68af1792ea",
+        "git_dirty": true,
+        "command": "/data/InferKernelLab/src/inferkernellab/rollout.py --engine hf_reference --model-source path --model-path /data/models/Qwen/Qwen3-0.6B --tokenizer-path /data/models/Qwen/Qwen3-0.6B --data-manifest /data/MiniTrainBench/results/gsm8k_hf_reference_single_seed_2026/data/manifest.json --prompts /data/MiniTrainBench/results/gsm8k_hf_reference_single_seed_2026/data/train.jsonl --output /data/MiniTrainBench/results/gsm8k_hf_reference_single_seed_2026/seed_2026/rollout.jsonl --device cuda --dtype bfloat16 --attention-implementation sdpa --num-generations 8 --max-new-tokens 256 --temperature 0.8 --top-p 1.0 --seed 2026",
+        "source_sha256": "3e159e43e5276ea494fcf0811d7897bff4e4dbe42cdc2b0fc0c37e0c57b63bc7"
+      },
+      "data_manifest": "/data/MiniTrainBench/results/gsm8k_hf_reference_single_seed_2026/data/manifest.json",
+      "data_fingerprint": "03a8a84ce5031499274a9051fb24a7ce1ca2bb52d1c4f3ff80f46ece33ac0eab",
+      "data_metadata": {
+        "dataset": "openai/gsm8k",
+        "license": "MIT",
+        "source_urls": {
+          "train": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl",
+          "test": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl"
+        },
+        "source_sha256": {
+          "train": "17f347dc51477c50d4efb83959dbb7c56297aba886e5544ee2aaed3024813465",
+          "test": "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14"
+        },
+        "official_counts": {
+          "train": 7473,
+          "test": 1319
+        },
+        "prepared_counts": {
+          "train": 256,
+          "test": 1319
+        },
+        "train_sample_seed": 2026,
+        "train_indices_sha256": "f8e2a9729458edfdd952a5cb6c43ea8b4f8072252b24cda65e700c5bcf296664"
+      },
+      "prompt_file": "/data/MiniTrainBench/results/gsm8k_hf_reference_single_seed_2026/data/train.jsonl",
+      "prompt_file_sha256": "9a26cdc144b840656433898a60b9f94616cc021cdc1275dc9ff3c53ca754a84c"
+    }
+  ],
+  "sglang_container_image_id": "sha256:5a9ac549c12104c2b8757b28785c92a8710076f0a71f77ca8e18e1dd264d06d5",
+  "initial": {
+    "count": 1319,
+    "correct": 677,
+    "exact_match": 0.513267626990144,
+    "throughput_samples_per_sec": 7.448591752125968,
+    "max_new_tokens": 256,
+    "batch_size": 128,
+    "seed": 2026,
+    "temperature": 0.0,
+    "prompt_format": "gsm8k_chat_no_thinking_v1",
+    "model_fingerprint": "7040300522d6a8e37168797ec9491af171e2328824b765546bbbe484249f9dd9",
+    "tokenizer_fingerprint": "7a50b53b219d9620306d5534cbe74327e4cfb72faf5578fc52fe56f9bc930791",
+    "data_sha256": "cbd53f6e036445b6a00e0aa96b354b4a265b37338d0583940a2f52e473cdc256",
+    "sglang_server": {
+      "version": "0.5.18",
+      "model_path": "/data/models/Qwen/Qwen3-0.6B",
+      "dtype": "bfloat16",
+      "attention_backend": "fa3",
+      "sampling_backend": "pytorch",
+      "enable_fp32_lm_head": false,
+      "enable_deterministic_inference": true,
+      "rl_on_policy_target": "fsdp"
+    },
+    "provenance": {
+      "git_revision": "6a37f7e50acd77475a0c1ecae76d5b5ae4a7c115",
+      "git_dirty": false
+    }
+  },
+  "updated": [
+    {
+      "count": 1319,
+      "correct": 677,
+      "exact_match": 0.513267626990144,
+      "throughput_samples_per_sec": 7.470190034308353,
+      "max_new_tokens": 256,
+      "batch_size": 128,
+      "seed": 2026,
+      "temperature": 0.0,
+      "prompt_format": "gsm8k_chat_no_thinking_v1",
+      "model_fingerprint": "dbcf782eebd32ecd59d9196dd249b71fe020a6eb17b96df6e72133f3e6884a7d",
+      "tokenizer_fingerprint": "7a50b53b219d9620306d5534cbe74327e4cfb72faf5578fc52fe56f9bc930791",
+      "data_sha256": "cbd53f6e036445b6a00e0aa96b354b4a265b37338d0583940a2f52e473cdc256",
+      "sglang_server": {
+        "version": "0.5.18",
+        "model_path": "/experiment/seed_2026/updated_model",
+        "dtype": "bfloat16",
+        "attention_backend": "fa3",
+        "sampling_backend": "pytorch",
+        "enable_fp32_lm_head": false,
+        "enable_deterministic_inference": true,
+        "rl_on_policy_target": "fsdp"
+      },
+      "provenance": {
+        "git_revision": "6a37f7e50acd77475a0c1ecae76d5b5ae4a7c115",
+        "git_dirty": false
+      }
+    }
+  ],
+  "training": [
+    {
+      "command": [
+        "/data/MiniTrainBench/src/minitrainbench/__main__.py",
+        "rl",
+        "grpo-train",
+        "--model-path",
+        "/data/models/Qwen/Qwen3-0.6B",
+        "--rollouts",
+        "results/gsm8k_hf_reference_single_seed_2026/seed_2026/rollout.jsonl",
+        "--output-model",
+        "results/gsm8k_hf_reference_single_seed_2026/seed_2026/updated_model",
+        "--output",
+        "results/gsm8k_hf_reference_single_seed_2026/seed_2026/train.json",
+        "--device",
+        "cuda",
+        "--backend",
+        "nccl",
+        "--precision",
+        "bf16",
+        "--attention-implementation",
+        "sdpa",
+        "--steps",
+        "16",
+        "--learning-rate",
+        "1e-6",
+        "--clip-epsilon",
+        "0.2",
+        "--kl-coef",
+        "0.01",
+        "--checkpoint-dir",
+        "results/gsm8k_hf_reference_single_seed_2026/seed_2026/checkpoints",
+        "--save-every",
+        "1",
+        "--keep-last",
+        "2",
+        "--groups-per-step",
+        "8",
+        "--microbatch-groups",
+        "1",
+        "--seed",
+        "2026",
+        "--preflight-report",
+        "results/gsm8k_hf_reference_single_seed_2026/seed_2026/preflight.json"
+      ],
+      "global_step": 16,
+      "world_size": 2,
+      "precision": "bf16",
+      "rollout_engine": "hf_reference",
+      "policy_forward_mode": "qwen3_hf_incremental_cache_v1",
+      "attention_implementation": "sdpa",
+      "prompt_groups": 256,
+      "responses_per_group": 8,
+      "logprob_probe": {
+        "baseline_ratio_outside_0_8_1_2_fraction": 0.0,
+        "max_abs_error": 0.0,
+        "mean_abs_error": 0.0,
+        "p99_abs_error": 0.0,
+        "passed": true,
+        "token_count": 419959,
+        "tolerance": 0.5,
+        "worst": {
+          "abs_error": 0.0,
+          "completion": 0,
+          "current_logprob": -0.22474081814289093,
+          "group_id": "train-1",
+          "old_logprob": -0.22474081814289093,
+          "response_position": 0
+        }
+      },
+      "optimizer_updated": true,
+      "dp_parameters_consistent": true,
+      "resumed": false,
+      "tokens_per_sec": 12.091704433617764,
+      "response_tokens_seen": 419959,
+      "step_time_ms_mean": 2170697.9064941406,
+      "peak_memory_allocated_bytes": 28607769600,
+      "grad_norm_max": 1.72344172000885,
+      "initial_policy_fingerprint": "7040300522d6a8e37168797ec9491af171e2328824b765546bbbe484249f9dd9",
+      "updated_policy_fingerprint": "dbcf782eebd32ecd59d9196dd249b71fe020a6eb17b96df6e72133f3e6884a7d",
+      "policy_state_sha256": "a68bc33fddbd5890d20722794b046cd90e52a55a28558380bcff39fa0da8a8e6",
+      "rollout_sha256": "e4716033b3b16ee45fc0ef905ee726f037fc1e861181c118610cf055e01f5d97",
+      "data_fingerprint": "03a8a84ce5031499274a9051fb24a7ce1ca2bb52d1c4f3ff80f46ece33ac0eab",
+      "source_sha256": "d298b4e50b96ce24e68726173a841610b7f3b1482cc5ad7a93db23df5ca3276b",
+      "environment": {
+        "cuda": "12.4",
+        "cudnn": "90100",
+        "device": "cuda:0",
+        "driver": "580.173.02",
+        "gpu": "NVIDIA A100-SXM4-40GB",
+        "gpu_count": 2,
+        "nccl": "2.21.5",
+        "python": "3.10.12",
+        "torch": "2.6.0+cu124",
+        "transformers": "4.57.6"
+      },
+      "provenance": {
+        "base_image": null,
+        "build_revision": null,
+        "command": null,
+        "complete": false,
+        "git_dirty": true,
+        "git_revision": "291a3108e09389d4b3dd94195a557bc291a737c1",
+        "image_id": null,
+        "image_ref": null,
+        "missing_fields": [
+          "base_image",
+          "build_revision",
+          "clean_worktree",
+          "command",
+          "image_id",
+          "image_ref"
+        ]
+      }
+    }
+  ],
+  "limitations": [
+    "HF reference rollout is a serial correctness baseline, not a throughput optimization.",
+    "Single-seed results do not establish stability across sampling seeds.",
+    "Subset training and fixed token-budget evaluation are not a standard benchmark claim.",
+    "No measured EM improvement: baseline and updated model both score 677/1319.",
+    "HF rollout and training ran on the host; the container image fingerprint describes SGLang evaluation only.",
+    "Rollout and training provenance preserve dirty worktree/source hashes; training provenance.complete is false. This run is not claimed to originate from a clean pinned container build.",
+    "Final DCP model/TrainState readback passed; optimizer resume was verified separately in the two-rank smoke, not by resuming the final 16-step run."
+  ],
+  "final_checkpoint_readback": {
+    "status": "ok",
+    "verification": "final_dcp_model_and_train_state_readback",
+    "checkpoint_step": 16,
+    "policy_state_sha256": "a68bc33fddbd5890d20722794b046cd90e52a55a28558380bcff39fa0da8a8e6",
+    "matches_training_report": true,
+    "optimizer_updated_by_verification": false,
+    "scope": "CPU model and TrainState readback; optimizer resume was separately verified by the two-rank update/resume smoke.",
+    "train_state": {
+      "global_step": 16,
+      "micro_step": 0,
+      "tokens_seen": 419959,
+      "seed": 2026
+    }
+  },
+  "smoke_verification": {
+    "update": {
+      "global_step": 1,
+      "resumed": false,
+      "optimizer_updated": true,
+      "dp_parameters_consistent": true,
+      "policy_state_sha256": "c1dfac89b33acfcd3e06070693b31505d5ce0c3b36003c099b0466c59b5b2bec",
+      "initial_policy_fingerprint": "7040300522d6a8e37168797ec9491af171e2328824b765546bbbe484249f9dd9",
+      "updated_policy_fingerprint": "305ea567540d0dbb854bc81061618413325e03b34e47f5b5f86c5b77ac0a045f",
+      "logprob_probe": {
+        "baseline_ratio_outside_0_8_1_2_fraction": 0.0,
+        "max_abs_error": 0.0,
+        "mean_abs_error": 0.0,
+        "p99_abs_error": 0.0,
+        "passed": true,
+        "token_count": 11332,
+        "tolerance": 0.5,
+        "worst": {
+          "abs_error": 0.0,
+          "completion": 0,
+          "current_logprob": -0.22474081814289093,
+          "group_id": "train-1",
+          "old_logprob": -0.22474081814289093,
+          "response_position": 0
+        }
+      }
+    },
+    "resume": {
+      "global_step": 2,
+      "resumed": true,
+      "optimizer_updated": true,
+      "dp_parameters_consistent": true,
+      "policy_state_sha256": "f070d756db218e5735347ae083672a828bfd9ffa19215000f2eeaa1c50f1a7d9",
+      "initial_policy_fingerprint": "7040300522d6a8e37168797ec9491af171e2328824b765546bbbe484249f9dd9",
+      "updated_policy_fingerprint": "b253a824351f70e6db7d1491de24923eae755ab9daff4c35ff9c232fd7e3cc7d",
+      "logprob_probe": {
+        "baseline_ratio_outside_0_8_1_2_fraction": 0.0,
+        "max_abs_error": 0.0,
+        "mean_abs_error": 0.0,
+        "p99_abs_error": 0.0,
+        "passed": true,
+        "token_count": 11332,
+        "tolerance": 0.5,
+        "worst": {
+          "abs_error": 0.0,
+          "completion": 0,
+          "current_logprob": -0.22474081814289093,
+          "group_id": "train-1",
+          "old_logprob": -0.22474081814289093,
+          "response_position": 0
+        }
+      }
+    }
+  },
+  "storage_cleanup": {
+    "smoke": {
+      "phase": "smoke",
+      "removed": [
+        "smoke/updated-step1",
+        "smoke/updated-resumed",
+        "smoke/checkpoints"
+      ],
+      "bytes_removed": null,
+      "estimated_gib_removed": 19,
+      "note": "Manual scoped deletion after successful smoke and DCP resume. Exact byte count was not recorded; estimate from before/after du."
+    },
+    "formal": {
+      "phase": "complete",
+      "removed": [
+        "seed_2026/checkpoints"
+      ],
+      "bytes_removed": 15553720750
+    },
+    "retained": [
+      "one updated model",
+      "rollout",
+      "verified dataset and small stage reports"
+    ],
+    "retained_run_size_approx_gib": 2.3,
+    "owned_evaluation_container_removed": true
+  }
+}

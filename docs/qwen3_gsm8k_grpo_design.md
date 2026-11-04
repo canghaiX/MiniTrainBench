@@ -1,6 +1,12 @@
-# Qwen3 + SGLang GSM8K GRPO
+# Qwen3 HF reference GRPO and SGLang serving evaluation
 
-The local Qwen3/SGLang path is implemented and tested, but the full BF16
+The HF incremental-cache single-seed cycle is complete: 16 dual-GPU BF16 steps,
+419,959 response tokens with maximum logprob error 0.0, and full-test evaluation
+before/after. Both models score 677/1,319 (51.3268%): no measured EM improvement.
+See the [final report](gsm8k_single_seed_result.md) for results and provenance
+limitations. HF is the behavior policy; SGLang is the separate evaluation engine.
+
+The historical local Qwen3/SGLang rollout path is implemented and tested, but its full BF16
 experiment has **not passed the policy logprob acceptance gate**. Read
 [`gsm8k_grpo_validation.md`](gsm8k_grpo_validation.md) before interpreting the
 results. A passing short smoke is not evidence that the complete 256 × 8
@@ -96,8 +102,13 @@ reward variance, and completed one dual-GPU BF16 update. Parameters changed,
 rank digests matched, and peak allocated memory was 19.7 GiB. The script now
 checks these conditions. DCP resume then reached step 2, passed the same
 preflight, changed the policy, and retained matching rank digests; peak
-allocated memory was 23.9 GiB. No full 256 × 8 HF reference gate or updated-
-model EM has been measured yet.
+allocated memory was 23.9 GiB. The subsequent seed-2026 full 256 × 8 gate
+passed for 419,959 tokens (max/mean/P99 error 0.0). Formal training completed
+16 steps with changed parameters and consistent ranks; final model/TrainState
+DCP readback matched the training digest. Peak allocated memory was 26.64 GiB,
+training throughput 12.09 response token/s. Initial and updated full-test EM
+were both 677/1,319; this single-seed experiment establishes the system cycle,
+not an accuracy gain. [Final evidence](gsm8k_single_seed_result.md).
 
 Incremental actor training processes one completion at a time and backpropagates
 its equally weighted contribution immediately, preserving the mean over

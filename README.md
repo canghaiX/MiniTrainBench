@@ -41,7 +41,7 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 | Megatron-LM | external compatibility smoke | `core_v0.18.2` 五组 8 卡 TP/PP/DP 已跑通；NGC repeat=3 性能待补 |
 | Memory pressure | 8 卡 benchmarked | 23.2M/168.5M/731.1M/2.60B 的 DDP/FSDP/ZeRO 成功与 OOM 证据 |
 | Multi-node | doctor + scripts | torchrun 多机模板、NCCL 诊断文档 |
-| Offline GRPO | Llama 已验证；Qwen3 HF reference 单 seed 闭环进行中 | 同一 HF incremental-cache rollout/scorer、GSM8K reward、双卡 DDP 更新和 DCP resume smoke；完整单 seed gate/评测结果以实验摘要为准 |
+| Offline GRPO | Llama 已验证；Qwen3 HF reference 单 seed 闭环已验收 | 419,959-token gate max error=0；双卡 BF16/DDP 16 步、DCP resume smoke 与最终回读；完整 1,319 题 EM 前后均为 677/1,319，未测到提升 |
 
 ## 面向训练基础设施的能力展示
 
@@ -94,10 +94,9 @@ provenance 的结果为准；Megatron 当前公开的是 compatibility smoke，N
 [简历项目素材](docs/resume_project_summary.md)。
 
 <!-- grpo-single-seed-result:start -->
-RL Infra 验收进度：统一 Qwen3-0.6B 的 HF 增量采样与训练概率口径，全量
-419,959-token logprob gate 最大误差为 0；双 A100 BF16/DDP 更新及 DCP 恢复
-smoke 通过。seed 2026 的正式 16 步训练正在运行，完整 test EM 尚待评测。
-状态和复现命令见 [单 seed 运行记录](docs/gsm8k_single_seed_run.md)。
+> 构建 Qwen3-0.6B 离线 GRPO 系统验证链路，统一 HF 增量采样与训练概率口径，通过 419,959-token logprob gate（max error=0）、双 A100 BF16/DDP 更新和 DCP 恢复 smoke；完成 seed 2026 的 256 题子集训练（8 completions/group、16 步）及 1,319 题前后 greedy 评测，EM 从 51.3268% 变为 51.3268%（+0.0000 个百分点）。单 seed 系统验收，不声称多 seed 稳定收益。
+
+[完整验收报告](docs/gsm8k_single_seed_result.md) · [轻量数据与指纹](docs/benchmark_results/gsm8k_hf_reference_single_seed_2026.json)
 <!-- grpo-single-seed-result:end -->
 
 > 构建了一个 Docker 化的分布式 LLM 训练 benchmark，对比 PyTorch DDP/FSDP/DeepSpeed
@@ -725,7 +724,9 @@ SGLang rollout 保留为独立 serving 对照；`hf_reference` 是低吞吐的 Q
 2026 的 256 题 rollout；全量 BF16 logprob gate 通过后才运行 16 步双卡 DDP 更新和完整
 test 评测。门槛为 `max_abs_logprob_error <= 0.5`，任一阶段失败即停止。A100 8 题 × 8
 completions smoke 已覆盖 11,332 个 token，preflight max error=0；完成一步更新和 step-2
-DCP 恢复，参数变化且 rank 一致。本轮单 seed 的已验证证据、当前验收状态与复现命令见
+DCP 恢复，参数变化且 rank 一致。正式单 seed 已完成 16 步更新、最终 DCP 回读及
+1,319 题前后评测，EM 均为 677/1,319（51.3268%），未测到提升。
+[完整验收报告](docs/gsm8k_single_seed_result.md)记录结果与边界；复现命令见
 [`docs/gsm8k_single_seed_run.md`](docs/gsm8k_single_seed_run.md)。采样口径、损失和限制见
 [`docs/grpo_rollout_design.md`](docs/grpo_rollout_design.md)。
 Qwen3/SGLang 数据流和 BF16 logprob 兼容性说明见

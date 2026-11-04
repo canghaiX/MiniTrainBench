@@ -33,13 +33,21 @@
 
 ## 面向 RL Infra 的跨项目补充
 
-当前可以写：
+已验收的单 seed 系统闭环可以写：
 
-> 构建 Qwen3-0.6B 离线 GRPO 校验路径，统一 HF 增量 KV-cache 采样与训练打分口径；在 GSM8K 固定 256 题、每题 8 completion 的 419,959-token 全量预检中，最大 logprob 误差为 0（门槛 0.5）；完成双 A100 BF16/DDP 更新、rank 参数一致性及 DCP 恢复 smoke。
+> 构建 Qwen3-0.6B 离线 GRPO 验证闭环，统一 HF 增量 KV-cache 采样与可训练打分口径，419,959-token 全量 logprob 预检最大误差为 0；在双 A100 上完成 BF16/DDP 16 步更新、rank 一致性、DCP 恢复 smoke 与最终 checkpoint 回读，并用 SGLang 完成 1,319 题前后评测。
 
 实现还包括温度/EOS 对齐、模型/tokenizer/数据和运行时指纹、失败 gate 阻止更新，以及 checkpoint 保留和中间产物清理。诊断覆盖 SGLang sampler、teacher-forced score、HF full-sequence/prefix/cache 和逐层激活对照。
 
-证据：[单 seed 验收记录](gsm8k_single_seed_run.md)、[轻量验收快照](benchmark_results/gsm8k_hf_reference_progress_20261104.json)、[设计](qwen3_gsm8k_grpo_design.md)。正式 16 步训练及 1,319 题前后评测尚未全部验收，因此暂不写“已完成 GSM8K 训练评测闭环”或“EM 提升”。HF reference 是串行 correctness 基线；SGLang 当前作为独立 serving/评测对照，不声称其 rollout 已与 trainer 完成概率对齐。
+证据：[完整验收报告](gsm8k_single_seed_result.md)、[轻量结果与指纹](benchmark_results/gsm8k_hf_reference_single_seed_2026.json)、[复现入口](gsm8k_single_seed_run.md)、[设计](qwen3_gsm8k_grpo_design.md)。seed 2026，256 题子集 × 8 completions，最多 256 token，正式训练 16 步；完整 test 的 EM 前后均为 677/1,319（51.3268%），变化为 0 个百分点。简历突出概率契约、分布式更新和恢复验收，不写准确率提升或多 seed 稳定性。
+
+面试应主动说明：HF reference 是串行 correctness 基线，训练约 12.09 response token/s，峰值 allocated 26.64 GiB；SGLang 用于独立 serving/评测，不声称其 rollout 已与 trainer 完成概率对齐。正式训练没有中途 resume，optimizer 恢复由独立双卡 smoke 验证，最终 checkpoint 做模型和 TrainState 回读。运行时的 dirty provenance 与缺失容器字段保留，不宣称 clean build 复现。
+
+可以按岗位从以下三点选两点，避免与上面的主项目描述重复：
+
+- 定位 SGLang/HF full-sequence、prefix、incremental-cache 路径的 token logprob 差异，建立温度、EOS、模型/tokenizer/环境指纹契约及严格全 token gate，失败时阻止 optimizer 更新。
+- 通过逐 completion 反向释放 cache graph，处理 DDP 不同 rank 前向次数不一致的问题，完成 BF16 双卡更新、rank 参数一致性及 DCP 更新恢复验收。
+- 将 rollout → 全量概率预检 → 16 步更新 → 完整测试集评测串成可复现脚本；限制 checkpoint 保留数量并在验收后清理中间产物，公开轻量结果，诚实记录单 seed EM 无提升。
 
 ## 投递时如何取舍
 

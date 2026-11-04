@@ -1,3 +1,5 @@
+> 本轮最终验收已完成，实际 EM 和简历表述见 [完整验收报告](gsm8k_single_seed_result.md)。以下保留运行期间的证据快照和复现说明。
+
 # Qwen3 HF reference 单 seed GRPO 验收
 
 本轮固定 seed 2026、256 题 GSM8K 训练子集、每题 8 条 completion、最多 256 token。HF reference 采样与 trainer 共用单条增量 KV-cache 概率口径；SGLang 0.5.18/FA3 用于训练前后完整 test 的独立评测。
@@ -51,6 +53,6 @@ PYTHONPATH=src python3 scripts/summarize_gsm8k_grpo.py --root results/gsm8k_hf_r
 
 摘要要求 16 步实际更新、模型指纹变化、rank 一致、评测模型匹配和完整 test 数量一致。单 seed 标准差写为 null；EM 下降照实保留。缺少训练/评测结果或 gate 未通过时，拒绝生成成功摘要。实验运行时工作区包含已有未提交改动，provenance 保留 dirty 状态与源码 SHA-256，不声称 clean commit 可复现。
 
-## 当前简历口径
+## 最终简历口径
 
-统一 Qwen3 HF 增量采样/训练 logprob 口径，在双 A100 上完成 BF16 GRPO 更新与 DCP 恢复 smoke，参数实际变化且 rank 一致；seed 2026 的 256 × 8 正式 rollout 共 419,959 token，全量 gate 最大误差为 0。完整单 seed 训练评测仍待验收，暂不写成完整闭环或效果提升。轻量原始字段见 [验收快照](benchmark_results/gsm8k_hf_reference_progress_20261104.json)。
+统一 Qwen3 HF 增量采样/训练 logprob 口径，419,959-token 全量 gate 最大误差为 0；在双 A100 上完成 BF16/DDP 16 步更新、rank 一致性、DCP 恢复 smoke 和最终 checkpoint 回读，并完成 1,319 题前后评测。EM 均为 677/1,319（51.3268%），不写效果提升。详见 [最终报告](gsm8k_single_seed_result.md)与[简历素材](resume_project_summary.md)；[运行中快照](benchmark_results/gsm8k_hf_reference_progress_20261104.json)仅作历史记录。
